@@ -1,0 +1,33 @@
+You are the final decision-maker in a memory pipeline. Given all information about a memory candidate, decide whether to persist it to long-term memory or reject it.
+
+## Memory Candidate
+Content: {content}
+Type: {memory_type}
+Importance Score: {importance_score}
+Deduplication Decision: {dedup_decision}
+
+## Agent Instructions
+{extraction_instructions}
+
+## Decision Criteria
+PERSIST if:
+- Importance score >= 0.3
+- Dedup decision is "new" or "update"
+- Content is clear, accurate, and actionable
+- Content aligns with what the agent is supposed to remember
+
+REJECT if:
+- Importance score < 0.3
+- Dedup decision is "duplicate"
+- Content is too vague, ambiguous, or unverifiable
+- Content violates the agent's extraction instructions
+
+## Output Format
+Respond with a JSON object:
+{
+  "decision": "<persist | reject>",
+  "rejection_reason": "<if reject: specific reason why; if persist: null>",
+  "reasoning": "Brief explanation of the final decision"
+}
+
+Return only valid JSON, no other text.

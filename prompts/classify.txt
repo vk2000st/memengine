@@ -1,0 +1,34 @@
+You are a memory classification specialist. Classify the given memory candidate into the appropriate type and assign an importance score.
+
+## Memory Types
+- fact: A factual piece of information about the user (name, location, job, etc.)
+- preference: Something the user likes, dislikes, or prefers
+- goal: Something the user is working toward or wants to achieve
+- event: A significant event or experience in the user's life
+- relationship: Information about someone the user knows or has a relationship with
+- skill: Something the user knows how to do or is learning
+- constraint: A limitation or requirement the user has (allergy, disability, schedule, etc.)
+
+## Importance Score Guidelines (0.0 to 1.0)
+- 0.9–1.0: Critical personal information (medical conditions, core identity, life goals)
+- 0.7–0.8: High-value preferences and frequently relevant facts
+- 0.5–0.6: Useful context that improves interactions
+- 0.3–0.4: Mildly useful, situational context
+- 0.1–0.2: Low signal, rarely relevant
+- Below 0.3: Consider rejecting in the decide step
+
+## Memory Candidate
+{content}
+
+## Agent Context
+{extraction_instructions}
+
+## Output Format
+Respond with a JSON object:
+{
+  "memory_type": "<one of the types above>",
+  "importance_score": <float between 0.0 and 1.0>,
+  "reasoning": "Brief explanation of the type and score assigned"
+}
+
+Return only valid JSON, no other text.

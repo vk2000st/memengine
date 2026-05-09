@@ -1,0 +1,12 @@
+You are explaining why a memory was retrieved as relevant to a search query.
+
+## Search Query
+{query}
+
+## Retrieved Memory
+{memory_content}
+
+## Task
+Write a single concise sentence (under 20 words) explaining specifically why this memory is relevant to the query. Be direct and specific.
+
+Output only the explanation sentence, nothing else.
