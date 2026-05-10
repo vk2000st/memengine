@@ -102,7 +102,7 @@ class MemEngine:
 
     def add(
         self,
-        slug: str,
+        agent_slug: str,
         user_id: str,
         messages: list[dict[str, str]],
         session_id: str | None = None,
@@ -111,14 +111,14 @@ class MemEngine:
         """
         Run the extraction pipeline on a conversation and persist memories.
 
-        :param slug: Agent slug to use for extraction.
+        :param agent_slug: Slug of the agent to use for extraction.
         :param user_id: Stable identifier for the end user.
         :param messages: List of ``{"role": "user"|"assistant", "content": "..."}`` dicts.
         :param session_id: Optional session grouping key.
         :param metadata: Arbitrary key/value pairs attached to persisted memories.
         :returns: :class:`AddResult` with ``persisted``, ``rejected``, ``candidates``, and ``trace_id``.
         """
-        payload: dict[str, Any] = {"slug": slug, "user_id": user_id, "messages": messages}
+        payload: dict[str, Any] = {"agent_slug": agent_slug, "user_id": user_id, "messages": messages}
         if session_id is not None:
             payload["session_id"] = session_id
         if metadata:
@@ -136,7 +136,7 @@ class MemEngine:
 
     def search(
         self,
-        slug: str,
+        agent_slug: str,
         user_id: str,
         query: str,
         limit: int = 10,
@@ -147,7 +147,7 @@ class MemEngine:
 
         :returns: :class:`SearchResponse` with ``results`` (ranked) and ``rewritten_query``.
         """
-        payload: dict[str, Any] = {"slug": slug, "user_id": user_id, "query": query, "limit": limit}
+        payload: dict[str, Any] = {"agent_slug": agent_slug, "user_id": user_id, "query": query, "limit": limit}
         if session_id is not None:
             payload["session_id"] = session_id
 
@@ -161,7 +161,7 @@ class MemEngine:
 
     def list_memories(
         self,
-        slug: str,
+        agent_slug: str,
         user_id: str,
         limit: int = 50,
         session_id: str | None = None,
@@ -174,7 +174,7 @@ class MemEngine:
         Increase ``limit`` (max 50) to retrieve more results.
         """
         resp = self.search(
-            slug=slug,
+            agent_slug=agent_slug,
             user_id=user_id,
             query="user information preferences goals habits facts",
             limit=limit,

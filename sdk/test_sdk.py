@@ -21,7 +21,7 @@ print(f"   Agent: {agent.slug} ({agent.id})\n")
 
 print("3. Adding memory from conversation...")
 result = client.add(
-    slug="demo-agent",
+    agent_slug="demo-agent",
     user_id="alice",
     session_id="session-1",
     messages=[
@@ -37,7 +37,7 @@ for m in result.persisted:
 print(f"   Rejected : {len(result.rejected)} candidates\n")
 
 print("4. Searching memories...")
-resp = client.search(slug="demo-agent", user_id="alice", query="lifestyle and hobbies")
+resp = client.search(agent_slug="demo-agent", user_id="alice", query="lifestyle and hobbies")
 print(f"   Rewritten query: {resp.rewritten_query}")
 print(f"   Results ({len(resp.results)}):")
 for r in resp.results:

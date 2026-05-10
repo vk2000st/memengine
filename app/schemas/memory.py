@@ -9,11 +9,13 @@ from pydantic import BaseModel, Field
 
 class CompanyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    email: str | None = Field(None, max_length=255)
 
 
 class CompanyOut(BaseModel):
     id: uuid.UUID
     name: str
+    email: str | None = None
     api_key_prefix: str
     is_active: bool
     created_at: datetime
@@ -78,7 +80,7 @@ class Message(BaseModel):
 
 
 class MemoryAddRequest(BaseModel):
-    slug: str
+    agent_slug: str
     user_id: str = Field(..., min_length=1, max_length=255)
     session_id: str | None = Field(None, max_length=255)
     messages: list[Message] = Field(..., min_length=1)
@@ -86,7 +88,7 @@ class MemoryAddRequest(BaseModel):
 
 
 class MemorySearchRequest(BaseModel):
-    slug: str
+    agent_slug: str
     user_id: str = Field(..., min_length=1, max_length=255)
     query: str = Field(..., min_length=1)
     limit: int = Field(10, ge=1, le=50)

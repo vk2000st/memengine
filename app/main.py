@@ -141,6 +141,7 @@ async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_
     hashed = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt()).decode()
     company = Company(
         name=payload.name,
+        email=payload.email,
         api_key_hash=hashed,
         api_key_prefix=raw_key[:8],
     )
@@ -151,6 +152,7 @@ async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_
     return CompanyCreated(
         id=company.id,
         name=company.name,
+        email=company.email,
         api_key_prefix=company.api_key_prefix,
         is_active=company.is_active,
         created_at=company.created_at,
@@ -160,6 +162,18 @@ async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_
 
 @app.get("/companies/me", response_model=CompanyOut, tags=["Companies"])
 async def get_company_me(company: Company = Depends(get_company)):
+    return company
+
+
+@app.get("/companies/by-email", response_model=CompanyOut, tags=["Companies"])
+async def get_company_by_email(email: str, db: AsyncSession = Depends(get_db)):
+    """Look up a company by email. Used by the onboarding flow to check for an existing account."""
+    result = await db.execute(
+        select(Company).where(Company.email == email, Company.is_active == True)
+    )
+    company = result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="No account found for that email")
     return company
 
 
@@ -221,7 +235,7 @@ async def add_memory(
     qdrant: QdrantClient = Depends(get_qdrant),
 ):
     """Run the extraction pipeline on a conversation and persist resulting memories."""
-    agent = await get_agent_by_slug(payload.slug, company, db)
+    agent = await get_agent_by_slug(payload.agent_slug, company, db)
 
     trace = PipelineTrace(
         company_id=company.id,
@@ -276,7 +290,7 @@ async def search_memory(
     qdrant: QdrantClient = Depends(get_qdrant),
 ):
     """Search memories for a user using semantic similarity."""
-    agent = await get_agent_by_slug(payload.slug, company, db)
+    agent = await get_agent_by_slug(payload.agent_slug, company, db)
 
     results, rewritten_query = await run_search(
         query=payload.query,
