@@ -420,28 +420,33 @@ async def run_pipeline(
 
 async def run_search(
     query: str,
-    agent: Agent,
-    user_id: str,
+    company_id: uuid.UUID,
+    agent: Agent | None,
+    user_id: str | None,
     limit: int,
     session_id: str | None,
     db: AsyncSession,
     qdrant_client: Any,
 ) -> tuple[list[tuple[Memory, float, str]], str]:
     """
-    Search memories. Returns ([(memory, score, reason)], rewritten_query).
+    Search memories scoped to company. agent and user_id are optional filters.
+    Returns ([(memory, score, reason)], rewritten_query).
     """
     # Rewrite query
     rewrite_prompt = _fmt(_load_prompt("search_rewrite"), query=query)
     rewritten_raw, _ = await _llm_call(rewrite_prompt, "search_rewrite")
     rewritten_query = rewritten_raw.strip().strip('"')
 
-    # Embed and search
+    # Build Qdrant filter — company is always required, agent/user are optional
     embedding = await _embed(rewritten_query)
     must_filters = [
-        FieldCondition(key="agent_id", match=MatchValue(value=str(agent.id))),
-        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+        FieldCondition(key="company_id", match=MatchValue(value=str(company_id))),
         FieldCondition(key="deleted", match=MatchValue(value=False)),
     ]
+    if agent:
+        must_filters.append(FieldCondition(key="agent_id", match=MatchValue(value=str(agent.id))))
+    if user_id:
+        must_filters.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
     if session_id:
         must_filters.append(FieldCondition(key="session_id", match=MatchValue(value=session_id)))
 
@@ -453,7 +458,6 @@ async def run_search(
         with_payload=True,
     )
 
-    # Fetch DB records and generate retrieval reasons concurrently
     results = []
     for r in search_results.points:
         mem_id_str = r.payload.get("memory_id")
@@ -465,7 +469,11 @@ async def run_search(
             continue
 
         result = await db.execute(
-            select(Memory).where(Memory.id == mem_id, Memory.deleted_at.is_(None))
+            select(Memory).where(
+                Memory.id == mem_id,
+                Memory.company_id == company_id,
+                Memory.deleted_at.is_(None),
+            )
         )
         memory = result.scalar_one_or_none()
         if not memory:

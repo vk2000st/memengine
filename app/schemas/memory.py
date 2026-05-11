@@ -89,8 +89,8 @@ class MemoryAddRequest(BaseModel):
 
 
 class MemorySearchRequest(BaseModel):
-    agent_slug: str
-    user_id: str = Field(..., min_length=1, max_length=255)
+    agent_slug: str | None = None
+    user_id: str | None = Field(None, max_length=255)
     query: str = Field(..., min_length=1)
     limit: int = Field(10, ge=1, le=50)
     session_id: str | None = None

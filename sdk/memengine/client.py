@@ -136,18 +136,25 @@ class MemEngine:
 
     def search(
         self,
-        agent_slug: str,
-        user_id: str,
         query: str,
+        agent_slug: str | None = None,
+        user_id: str | None = None,
         limit: int = 10,
         session_id: str | None = None,
     ) -> SearchResponse:
         """
-        Search memories for a user using semantic similarity.
+        Search memories scoped to the authenticated company.
 
+        :param query: Natural-language search query.
+        :param agent_slug: Optional — filter to a specific agent. Omit to search all agents.
+        :param user_id: Optional — filter to a specific user. Omit to search all users.
         :returns: :class:`SearchResponse` with ``results`` (ranked) and ``rewritten_query``.
         """
-        payload: dict[str, Any] = {"agent_slug": agent_slug, "user_id": user_id, "query": query, "limit": limit}
+        payload: dict[str, Any] = {"query": query, "limit": limit}
+        if agent_slug is not None:
+            payload["agent_slug"] = agent_slug
+        if user_id is not None:
+            payload["user_id"] = user_id
         if session_id is not None:
             payload["session_id"] = session_id
 
@@ -161,22 +168,22 @@ class MemEngine:
 
     def list_memories(
         self,
-        agent_slug: str,
-        user_id: str,
+        agent_slug: str | None = None,
+        user_id: str | None = None,
         limit: int = 50,
         session_id: str | None = None,
     ) -> list[SearchResult]:
         """
-        Return the most relevant stored memories for a user.
+        Return the most relevant stored memories, optionally filtered by agent and/or user.
 
         The API exposes memories via semantic search only (no dedicated list endpoint).
         This method issues a broad recall query to approximate a full listing.
         Increase ``limit`` (max 50) to retrieve more results.
         """
         resp = self.search(
+            query="user information preferences goals habits facts",
             agent_slug=agent_slug,
             user_id=user_id,
-            query="user information preferences goals habits facts",
             limit=limit,
             session_id=session_id,
         )

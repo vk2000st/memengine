@@ -353,11 +353,14 @@ async def search_memory(
     db: AsyncSession = Depends(get_db),
     qdrant: QdrantClient = Depends(get_qdrant),
 ):
-    """Search memories for a user using semantic similarity."""
-    agent = await get_agent_by_slug(payload.agent_slug, company, db)
+    """Search memories scoped to the authenticated company. agent_slug and user_id are optional filters."""
+    agent = None
+    if payload.agent_slug:
+        agent = await get_agent_by_slug(payload.agent_slug, company, db)
 
     results, rewritten_query = await run_search(
         query=payload.query,
+        company_id=company.id,
         agent=agent,
         user_id=payload.user_id,
         limit=payload.limit,
