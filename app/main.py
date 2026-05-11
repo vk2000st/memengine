@@ -369,11 +369,21 @@ async def search_memory(
         qdrant_client=qdrant,
     )
 
+    # Batch-resolve agent slugs from the unique agent_ids in the result set
+    agent_slug_map: dict[uuid.UUID, str] = {}
+    agent_ids = {m.agent_id for m, _, _ in results}
+    if agent_ids:
+        slug_rows = (await db.execute(
+            select(Agent.id, Agent.slug).where(Agent.id.in_(agent_ids))
+        )).all()
+        agent_slug_map = {row.id: row.slug for row in slug_rows}
+
     search_results = [
         MemorySearchResult(
             **_memory_to_schema(m).model_dump(),
             similarity_score=score,
             retrieval_reason=reason,
+            agent_slug=agent_slug_map.get(m.agent_id),
         )
         for m, score, reason in results
     ]
