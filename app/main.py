@@ -1,16 +1,18 @@
 import secrets
 import uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import structlog
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
-from sqlalchemy import select
+from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,6 +23,8 @@ from app.models.db import (
 )
 from app.schemas.memory import (
     AgentCreate, AgentOut,
+    AgentMemoryCount, CategoryCount, MemoryDetail, TimelineEvent, UserProfile, UserSummary,
+    AnalyticsOverview, RecentTrace,
     AuditLogOut,
     CandidateOut,
     CompanyCreate, CompanyCreated, CompanyOut,
@@ -33,6 +37,26 @@ from app.services.extraction.pipeline import run_pipeline, run_search
 
 log = structlog.get_logger()
 settings = get_settings()
+
+
+# ── Encryption helpers ───────────────────────────────────────────────────────
+
+def _fernet() -> Fernet:
+    if not settings.encryption_key:
+        raise RuntimeError("ENCRYPTION_KEY is not configured")
+    return Fernet(settings.encryption_key.encode())
+
+
+def encrypt_api_key(raw: str) -> str:
+    return _fernet().encrypt(raw.encode()).decode()
+
+
+def decrypt_api_key(token: str) -> str | None:
+    try:
+        return _fernet().decrypt(token.encode()).decode()
+    except (InvalidToken, Exception):
+        return None
+
 
 _qdrant: QdrantClient | None = None
 
@@ -144,6 +168,7 @@ async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_
         email=payload.email,
         api_key_hash=hashed,
         api_key_prefix=raw_key[:8],
+        api_key_encrypted=encrypt_api_key(raw_key),
     )
     db.add(company)
     await db.commit()
@@ -162,7 +187,46 @@ async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_
 
 @app.get("/companies/me", response_model=CompanyOut, tags=["Companies"])
 async def get_company_me(company: Company = Depends(get_company)):
-    return company
+    """Return the authenticated company, including the decrypted API key if available."""
+    api_key = decrypt_api_key(company.api_key_encrypted) if company.api_key_encrypted else None
+    return CompanyOut(
+        id=company.id,
+        name=company.name,
+        email=company.email,
+        api_key_prefix=company.api_key_prefix,
+        api_key=api_key,
+        is_active=company.is_active,
+        created_at=company.created_at,
+    )
+
+
+@app.post("/companies/me/regenerate-key", response_model=CompanyOut, tags=["Companies"])
+async def regenerate_api_key(
+    company: Company = Depends(get_company),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rotate the API key. The old key is immediately invalidated.
+    Returns the new key in plaintext — store it; this is the only time it appears
+    outside of GET /companies/me.
+    """
+    raw_key = "mem_" + secrets.token_urlsafe(32)
+    company.api_key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt()).decode()
+    company.api_key_prefix = raw_key[:8]
+    company.api_key_encrypted = encrypt_api_key(raw_key)
+    db.add(company)
+    await db.commit()
+    await db.refresh(company)
+    log.info("api_key_regenerated", company_id=str(company.id))
+    return CompanyOut(
+        id=company.id,
+        name=company.name,
+        email=company.email,
+        api_key_prefix=company.api_key_prefix,
+        api_key=raw_key,
+        is_active=company.is_active,
+        created_at=company.created_at,
+    )
 
 
 @app.get("/companies/by-email", response_model=CompanyOut, tags=["Companies"])
@@ -399,6 +463,360 @@ async def get_memory_audit(
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "version": "1.0.0"}
+
+
+# ── Analytics routes ─────────────────────────────────────────────────────────
+
+@app.get("/analytics/overview", response_model=AnalyticsOverview, tags=["Analytics"])
+async def analytics_overview(
+    agent_slug: str | None = None,
+    since: datetime | None = None,
+    company: Company = Depends(get_company),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Aggregate memory stats for the dashboard.
+    Both agent_slug and since are optional filters.
+    recent_traces always returns the last 10 regardless of filters.
+    """
+    # Resolve optional agent filter
+    agent_id: uuid.UUID | None = None
+    if agent_slug:
+        agent_row = await db.execute(
+            select(Agent).where(Agent.company_id == company.id, Agent.slug == agent_slug)
+        )
+        agent = agent_row.scalar_one_or_none()
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_slug}' not found")
+        agent_id = agent.id
+
+    # ── total_memories: active (not deleted) for this company [+ agent] ──────
+    total_stmt = select(func.count(Memory.id)).where(
+        Memory.company_id == company.id,
+        Memory.deleted_at.is_(None),
+    )
+    if agent_id:
+        total_stmt = total_stmt.where(Memory.agent_id == agent_id)
+    total_memories: int = (await db.execute(total_stmt)).scalar_one()
+
+    # ── memories_added: same filter + created_at >= since ────────────────────
+    added_stmt = total_stmt  # inherits company + agent + deleted_at filters
+    if since:
+        added_stmt = added_stmt.where(Memory.created_at >= since)
+    memories_added: int = (await db.execute(added_stmt)).scalar_one()
+
+    # ── recent_traces: last 10 for this company, with per-candidate counts ───
+    traces_stmt = (
+        select(
+            PipelineTrace.id,
+            PipelineTrace.user_id,
+            PipelineTrace.created_at,
+            Agent.slug.label("agent_slug"),
+            func.count(MemoryCandidate.id).label("candidates_total"),
+            func.count(MemoryCandidate.id)
+                .filter(MemoryCandidate.final_decision == "persist")
+                .label("persisted_count"),
+            func.count(MemoryCandidate.id)
+                .filter(MemoryCandidate.final_decision == "reject")
+                .label("rejected_count"),
+        )
+        .join(Agent, PipelineTrace.agent_id == Agent.id)
+        .outerjoin(MemoryCandidate, MemoryCandidate.trace_id == PipelineTrace.id)
+        .where(PipelineTrace.company_id == company.id)
+        .group_by(PipelineTrace.id, PipelineTrace.user_id, PipelineTrace.created_at, Agent.slug)
+        .order_by(PipelineTrace.created_at.desc())
+        .limit(10)
+    )
+    traces_rows = (await db.execute(traces_stmt)).all()
+    recent_traces = [
+        RecentTrace(
+            trace_id=row.id,
+            agent_slug=row.agent_slug,
+            user_id=row.user_id,
+            candidates_total=row.candidates_total or 0,
+            persisted_count=row.persisted_count or 0,
+            rejected_count=row.rejected_count or 0,
+            created_at=row.created_at,
+        )
+        for row in traces_rows
+    ]
+
+    return AnalyticsOverview(
+        total_memories=total_memories,
+        memories_added=memories_added,
+        total_searches=0,
+        recent_traces=recent_traces,
+    )
+
+
+# ── User routes ──────────────────────────────────────────────────────────────
+
+@app.get("/users", response_model=list[UserSummary], tags=["Users"])
+async def list_users(
+    agent_slug: str | None = None,
+    last_active_days: int | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    company: Company = Depends(get_company),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all users for the company with aggregate memory stats."""
+    # Resolve optional agent filter
+    agent_id: uuid.UUID | None = None
+    if agent_slug:
+        row = await db.execute(
+            select(Agent).where(Agent.company_id == company.id, Agent.slug == agent_slug)
+        )
+        agent = row.scalar_one_or_none()
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_slug}' not found")
+        agent_id = agent.id
+
+    extra = [Memory.agent_id == agent_id] if agent_id else []
+
+    # Aggregate per user_id
+    stats_stmt = (
+        select(
+            Memory.user_id,
+            func.count(Memory.id).label("total_memories"),
+            func.max(Memory.created_at).label("last_memory_at"),
+            func.count(func.distinct(Memory.session_id)).label("session_count"),
+            func.mode().within_group(Memory.memory_type).label("top_category"),
+        )
+        .where(Memory.company_id == company.id, Memory.deleted_at.is_(None), *extra)
+        .group_by(Memory.user_id)
+        .order_by(func.max(Memory.created_at).desc())
+    )
+
+    if last_active_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=last_active_days)
+        stats_stmt = stats_stmt.having(func.max(Memory.created_at) >= cutoff)
+
+    stats_stmt = stats_stmt.limit(limit).offset(offset)
+    stats_rows = (await db.execute(stats_stmt)).all()
+
+    # Fetch agent slugs for each returned user in one query
+    user_ids = [r.user_id for r in stats_rows]
+    agents_by_user: dict[str, list[str]] = defaultdict(list)
+    if user_ids:
+        agent_rows = (await db.execute(
+            select(Memory.user_id, Agent.slug)
+            .join(Agent, Memory.agent_id == Agent.id)
+            .where(
+                Memory.company_id == company.id,
+                Memory.user_id.in_(user_ids),
+                Memory.deleted_at.is_(None),
+            )
+            .distinct()
+        )).all()
+        for r in agent_rows:
+            if r.slug not in agents_by_user[r.user_id]:
+                agents_by_user[r.user_id].append(r.slug)
+
+    return [
+        UserSummary(
+            user_id=r.user_id,
+            total_memories=r.total_memories,
+            last_memory_at=r.last_memory_at,
+            session_count=r.session_count,
+            top_category=r.top_category,
+            agents=agents_by_user.get(r.user_id, []),
+        )
+        for r in stats_rows
+    ]
+
+
+@app.get("/users/{user_id}/profile", response_model=UserProfile, tags=["Users"])
+async def get_user_profile(
+    user_id: str,
+    agent_slug: str | None = None,
+    company: Company = Depends(get_company),
+    db: AsyncSession = Depends(get_db),
+):
+    """Full memory profile for a single user, optionally filtered to one agent."""
+    agent_id: uuid.UUID | None = None
+    if agent_slug:
+        row = await db.execute(
+            select(Agent).where(Agent.company_id == company.id, Agent.slug == agent_slug)
+        )
+        agent = row.scalar_one_or_none()
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_slug}' not found")
+        agent_id = agent.id
+
+    mem_filter = [
+        Memory.company_id == company.id,
+        Memory.user_id == user_id,
+        *([Memory.agent_id == agent_id] if agent_id else []),
+    ]
+    trace_filter = [
+        PipelineTrace.company_id == company.id,
+        PipelineTrace.user_id == user_id,
+        *([PipelineTrace.agent_id == agent_id] if agent_id else []),
+    ]
+
+    # ── Basic stats ───────────────────────────────────────────────────────────
+    stats = (await db.execute(
+        select(
+            func.min(Memory.created_at).label("first_seen"),
+            func.max(Memory.created_at).label("last_active"),
+            func.count(Memory.id).filter(Memory.deleted_at.is_(None)).label("total_memories"),
+            func.count(func.distinct(Memory.session_id)).label("session_count"),
+        ).where(*mem_filter)
+    )).one()
+
+    if stats.first_seen is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # ── Agents breakdown ──────────────────────────────────────────────────────
+    agent_rows = (await db.execute(
+        select(Agent.slug, func.count(Memory.id).label("memory_count"))
+        .join(Memory, Memory.agent_id == Agent.id)
+        .where(Memory.company_id == company.id, Memory.user_id == user_id, Memory.deleted_at.is_(None))
+        .group_by(Agent.slug)
+        .order_by(func.count(Memory.id).desc())
+    )).all()
+
+    # ── Categories breakdown ──────────────────────────────────────────────────
+    cat_rows = (await db.execute(
+        select(Memory.memory_type.label("category"), func.count(Memory.id).label("count"))
+        .where(*mem_filter, Memory.deleted_at.is_(None))
+        .group_by(Memory.memory_type)
+        .order_by(func.count(Memory.id).desc())
+    )).all()
+
+    # ── Memories (with trace_id + confirmed_by via correlated subqueries) ─────
+    trace_id_sq = (
+        select(MemoryCandidate.trace_id)
+        .where(MemoryCandidate.memory_id == Memory.id)
+        .limit(1)
+        .correlate(Memory)
+        .scalar_subquery()
+    )
+    confirmed_sq = (
+        select(func.count(func.distinct(PipelineTrace.session_id)))
+        .join(MemoryCandidate, MemoryCandidate.trace_id == PipelineTrace.id)
+        .where(
+            or_(
+                MemoryCandidate.memory_id == Memory.id,
+                MemoryCandidate.dedup_target_id == Memory.id,
+            )
+        )
+        .correlate(Memory)
+        .scalar_subquery()
+    )
+
+    mem_rows = (await db.execute(
+        select(
+            Memory.id,
+            Memory.content,
+            Memory.memory_type,
+            Memory.session_id,
+            Memory.deleted_at,
+            Memory.created_at,
+            Memory.updated_at,
+            Agent.slug.label("agent_slug"),
+            trace_id_sq.label("trace_id"),
+            confirmed_sq.label("confirmed_by"),
+        )
+        .join(Agent, Memory.agent_id == Agent.id)
+        .where(*mem_filter)
+        .order_by(Memory.created_at.desc())
+    )).all()
+
+    # ── Rejected count ────────────────────────────────────────────────────────
+    rejected_count: int = (await db.execute(
+        select(func.count(MemoryCandidate.id))
+        .join(PipelineTrace, MemoryCandidate.trace_id == PipelineTrace.id)
+        .where(*trace_filter, MemoryCandidate.final_decision == "reject")
+    )).scalar_one()
+
+    # ── Timeline ──────────────────────────────────────────────────────────────
+    # Persisted memories → "added" or "updated" (based on dedup_decision)
+    persisted_events = (await db.execute(
+        select(
+            Memory.created_at.label("at"),
+            case(
+                (MemoryCandidate.dedup_decision == "update", "updated"),
+                else_="added",
+            ).label("event_type"),
+            Memory.content.label("memory_text"),
+            Agent.slug.label("agent_slug"),
+            Memory.session_id,
+        )
+        .join(Agent, Memory.agent_id == Agent.id)
+        .outerjoin(MemoryCandidate, MemoryCandidate.memory_id == Memory.id)
+        .where(*mem_filter, Memory.deleted_at.is_(None))
+    )).all()
+
+    # Soft-deleted memories → "deleted" event at deleted_at
+    deleted_events = (await db.execute(
+        select(
+            Memory.deleted_at.label("at"),
+            literal("deleted").label("event_type"),
+            Memory.content.label("memory_text"),
+            Agent.slug.label("agent_slug"),
+            Memory.session_id,
+        )
+        .join(Agent, Memory.agent_id == Agent.id)
+        .where(*mem_filter, Memory.deleted_at.isnot(None))
+    )).all()
+
+    # Rejected candidates → "rejected" event at trace created_at
+    rejected_events = (await db.execute(
+        select(
+            PipelineTrace.created_at.label("at"),
+            literal("rejected").label("event_type"),
+            MemoryCandidate.content.label("memory_text"),
+            Agent.slug.label("agent_slug"),
+            PipelineTrace.session_id,
+        )
+        .join(PipelineTrace, MemoryCandidate.trace_id == PipelineTrace.id)
+        .join(Agent, PipelineTrace.agent_id == Agent.id)
+        .where(*trace_filter, MemoryCandidate.final_decision == "reject")
+    )).all()
+
+    timeline = sorted(
+        [*persisted_events, *deleted_events, *rejected_events],
+        key=lambda r: r.at,
+        reverse=True,
+    )
+
+    return UserProfile(
+        user_id=user_id,
+        first_seen=stats.first_seen,
+        last_active=stats.last_active,
+        total_memories=stats.total_memories,
+        session_count=stats.session_count,
+        agents=[AgentMemoryCount(slug=r.slug, memory_count=r.memory_count) for r in agent_rows],
+        categories=[CategoryCount(category=r.category, count=r.count) for r in cat_rows],
+        memories=[
+            MemoryDetail(
+                memory_id=r.id,
+                memory_text=r.content,
+                category=r.memory_type,
+                agent_slug=r.agent_slug,
+                session_id=r.session_id,
+                confirmed_by=r.confirmed_by or 0,
+                status="deleted" if r.deleted_at else "active",
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                trace_id=r.trace_id,
+            )
+            for r in mem_rows
+        ],
+        rejected_count=rejected_count,
+        timeline=[
+            TimelineEvent(
+                at=r.at,
+                event_type=r.event_type,
+                memory_text=r.memory_text,
+                agent_slug=r.agent_slug,
+                session_id=r.session_id,
+            )
+            for r in timeline
+        ],
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

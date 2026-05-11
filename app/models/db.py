@@ -35,6 +35,7 @@ class Company(Base):
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     api_key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     api_key_prefix: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

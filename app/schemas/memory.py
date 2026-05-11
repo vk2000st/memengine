@@ -17,6 +17,7 @@ class CompanyOut(BaseModel):
     name: str
     email: str | None = None
     api_key_prefix: str
+    api_key: str | None = None  # populated by /me (decrypted) and on creation
     is_active: bool
     created_at: datetime
 
@@ -24,7 +25,7 @@ class CompanyOut(BaseModel):
 
 
 class CompanyCreated(CompanyOut):
-    api_key: str  # returned only on creation, never again
+    api_key: str  # non-optional on creation
 
 
 # ── Agent ───────────────────────────────────────────────────────────────────
@@ -156,5 +157,79 @@ class AuditLogOut(BaseModel):
     actor: str
     details: dict[str, Any]
     created_at: datetime
+
+
+# ── Users ────────────────────────────────────────────────────────────────────
+
+class UserSummary(BaseModel):
+    user_id: str
+    total_memories: int
+    agents: list[str]
+    last_memory_at: datetime | None
+    session_count: int
+    top_category: str | None
+
+
+class AgentMemoryCount(BaseModel):
+    slug: str
+    memory_count: int
+
+
+class CategoryCount(BaseModel):
+    category: str
+    count: int
+
+
+class MemoryDetail(BaseModel):
+    memory_id: uuid.UUID
+    memory_text: str
+    category: str
+    agent_slug: str
+    session_id: str | None
+    confirmed_by: int
+    status: str  # "active" | "deleted"
+    created_at: datetime
+    updated_at: datetime
+    trace_id: uuid.UUID | None
+
+
+class TimelineEvent(BaseModel):
+    at: datetime
+    event_type: str  # "added" | "updated" | "rejected" | "deleted"
+    memory_text: str
+    agent_slug: str
+    session_id: str | None
+
+
+class UserProfile(BaseModel):
+    user_id: str
+    first_seen: datetime | None
+    last_active: datetime | None
+    total_memories: int
+    session_count: int
+    agents: list[AgentMemoryCount]
+    categories: list[CategoryCount]
+    memories: list[MemoryDetail]
+    rejected_count: int
+    timeline: list[TimelineEvent]
+
+
+# ── Analytics ─────────────────────────────────────────────────────────────────
+
+class RecentTrace(BaseModel):
+    trace_id: uuid.UUID
+    agent_slug: str
+    user_id: str
+    candidates_total: int
+    persisted_count: int
+    rejected_count: int
+    created_at: datetime
+
+
+class AnalyticsOverview(BaseModel):
+    total_memories: int
+    memories_added: int
+    total_searches: int
+    recent_traces: list[RecentTrace]
 
     model_config = {"from_attributes": True}

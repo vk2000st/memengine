@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = "change-me"
+    encryption_key: str = ""
 
     # App
     app_env: str = "development"

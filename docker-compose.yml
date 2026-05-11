@@ -30,6 +30,11 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://memengine:memengine@postgres:5432/memengine
+      QDRANT_URL: http://qdrant:6333
+      LITELLM_MODEL: openai/gpt-4o-mini
+      ENCRYPTION_KEY: acZL8VjT4S5E15xgeVN5Qo6slWkwfxt1L4LKxeIPPrA=
     depends_on:
       postgres:
         condition: service_healthy
