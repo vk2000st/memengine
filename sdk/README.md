@@ -5,11 +5,16 @@ Python client for the [MemEngine](https://github.com/vk2000st/memengine) AI memo
 ## Installation
 
 ```bash
-pip install httpx                   # only dependency
-pip install -e ./sdk                # from the repo root
+pip install git+https://github.com/vk2000st/memengine.git#subdirectory=sdk
 ```
 
-Or copy the `memengine/` package directly into your project.
+> **PyPI package coming soon.** Install directly from GitHub for now.
+
+For local development from a clone:
+
+```bash
+pip install -e ./sdk                # from the repo root
+```
 
 ## Quick Start
 
