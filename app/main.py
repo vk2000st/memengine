@@ -312,14 +312,14 @@ async def create_agent(
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.execute(
-        select(Agent).where(Agent.company_id == company.id, Agent.slug == payload.slug)
+        select(Agent).where(Agent.company_id == company.id, Agent.slug == payload.agent_slug)
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"Agent slug '{payload.slug}' already exists")
+        raise HTTPException(status_code=409, detail=f"Agent slug '{payload.agent_slug}' already exists")
 
     agent = Agent(
         company_id=company.id,
-        slug=payload.slug,
+        slug=payload.agent_slug,
         name=payload.name,
         extraction_instructions=payload.extraction_instructions,
         config=payload.config,
@@ -342,13 +342,13 @@ async def list_agents(
     return result.scalars().all()
 
 
-@app.get("/agents/{slug}", response_model=AgentOut, tags=["Agents"])
+@app.get("/agents/{agent_slug}", response_model=AgentOut, tags=["Agents"])
 async def get_agent(
-    slug: str,
+    agent_slug: str,
     company: Company = Depends(get_company),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_agent_by_slug(slug, company, db)
+    return await get_agent_by_slug(agent_slug, company, db)
 
 
 # ── Memory routes ────────────────────────────────────────────────────────────

@@ -31,7 +31,7 @@ class CompanyCreated(CompanyOut):
 # ── Agent ───────────────────────────────────────────────────────────────────
 
 class AgentCreate(BaseModel):
-    slug: str = Field(..., pattern=r"^[a-z0-9_-]+$", min_length=1, max_length=100)
+    agent_slug: str = Field(..., pattern=r"^[a-z0-9_-]+$", min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=255)
     extraction_instructions: str = Field(..., min_length=10)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -40,7 +40,7 @@ class AgentCreate(BaseModel):
 class AgentOut(BaseModel):
     id: uuid.UUID
     company_id: uuid.UUID
-    slug: str
+    agent_slug: str = Field(validation_alias="slug")
     name: str
     extraction_instructions: str
     config: dict[str, Any]
@@ -48,7 +48,7 @@ class AgentOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 # ── Memory ───────────────────────────────────────────────────────────────────
@@ -77,6 +77,10 @@ class MemorySearchResult(MemoryOut):
 # ── Pipeline input ──────────────────────────────────────────────────────────
 
 class Message(BaseModel):
+    """
+    A single conversation turn. assistant messages are optional — include them
+    for context when user messages are ambiguous.
+    """
     role: str = Field(..., pattern=r"^(system|user|assistant)$")
     content: str
 
@@ -85,8 +89,30 @@ class MemoryAddRequest(BaseModel):
     agent_slug: str
     user_id: str = Field(..., min_length=1, max_length=255)
     session_id: str | None = Field(None, max_length=255)
-    messages: list[Message] = Field(..., min_length=1)
+    messages: list[Message] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Conversation messages. role must be 'user' or 'assistant'. "
+            "Only user messages are extracted — assistant messages provide optional context. "
+            "Messages are processed in order, last message is most recent."
+        ),
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "agent_slug": "support-bot",
+                "user_id": "alice",
+                "session_id": "sess_001",
+                "messages": [
+                    {"role": "user", "content": "I'm having the CSV export issue again"},
+                    {"role": "assistant", "content": "I can help with that"},
+                ],
+            }
+        }
+    }
 
 
 class MemorySearchRequest(BaseModel):
