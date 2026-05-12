@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     postmark_from: str = ""
     report_email_to: str = "vibhanshu.karn@gmail.com"
 
+    # Playground demo
+    demo_api_key: str = ""
+    demo_agent_slug: str = "support-bot"
+
     # Pipeline tunables
     dedup_similarity_threshold: float = 0.85
     dedup_candidate_limit: int = 5

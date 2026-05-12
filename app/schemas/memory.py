@@ -301,3 +301,12 @@ class AnalyticsOverview(BaseModel):
     recent_traces: list[RecentTrace]
 
     model_config = {"from_attributes": True}
+
+
+# ── Playground ────────────────────────────────────────────────────────────────
+
+class PlaygroundSessionOut(BaseModel):
+    session_id: str
+    user_id: str
+    agent_slug: str
+    api_key: str

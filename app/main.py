@@ -32,12 +32,28 @@ from app.schemas.memory import (
     MemoryAddAccepted, MemoryAddRequest,
     MemoryOut,
     MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
+    PlaygroundSessionOut,
     TraceOut, TraceReportCreate, TraceReportOut, TraceStatusOut,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
 
 log = structlog.get_logger()
 settings = get_settings()
+
+# In-memory rate-limit store for the playground endpoint: IP → list[request_time]
+_playground_rate: dict[str, list[datetime]] = defaultdict(list)
+_PLAYGROUND_LIMIT = 20
+_PLAYGROUND_WINDOW = timedelta(hours=1)
+
+
+def _playground_rate_ok(ip: str) -> bool:
+    now = datetime.now(timezone.utc)
+    cutoff = now - _PLAYGROUND_WINDOW
+    _playground_rate[ip] = [t for t in _playground_rate[ip] if t > cutoff]
+    if len(_playground_rate[ip]) >= _PLAYGROUND_LIMIT:
+        return False
+    _playground_rate[ip].append(now)
+    return True
 
 
 # ── Encryption helpers ───────────────────────────────────────────────────────
@@ -1019,6 +1035,44 @@ async def get_user_profile(
             )
             for r in timeline
         ],
+    )
+
+
+# ── Playground routes ────────────────────────────────────────────────────────
+
+@app.post("/playground/session", response_model=PlaygroundSessionOut, tags=["Playground"])
+async def create_playground_session(request: Request):
+    """
+    Public endpoint — no auth required. Rate limited: 20 calls per IP per hour.
+
+    Pre-setup (run once against the live API, then set env vars):
+      1. POST /companies  {"name": "Playground Demo"}
+         → copy api_key  → DEMO_API_KEY in env
+      2. POST /agents  {"agent_slug": "support-bot", "name": "Support Bot",
+                        "extraction_instructions": "..."}  (auth with DEMO_API_KEY)
+         → set DEMO_AGENT_SLUG=support-bot in env
+
+    Demo users are ephemeral — no PII is stored. Each call returns a fresh user_id.
+    Sessions expire after 2 turns (enforced by the frontend).
+    """
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host or "unknown").split(",")[0].strip()
+
+    if not _playground_rate_ok(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Max 20 playground sessions per IP per hour.",
+        )
+
+    if not settings.demo_api_key:
+        raise HTTPException(status_code=503, detail="Playground is not configured on this server.")
+
+    user_id = "demo_" + uuid.uuid4().hex[:8]
+
+    return PlaygroundSessionOut(
+        session_id=user_id,
+        user_id=user_id,
+        agent_slug=settings.demo_agent_slug,
+        api_key=settings.demo_api_key,
     )
 
 
