@@ -71,7 +71,8 @@ async def _extract_step(
     db: AsyncSession,
 ) -> tuple[list[dict], int]:
     """Returns list of {content, rationale} dicts and total tokens used."""
-    conversation = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    conversation = "\n".join(m["content"] for m in user_messages)
     prompt = _fmt(
         _load_prompt("extract"),
         extraction_instructions=agent.extraction_instructions,
