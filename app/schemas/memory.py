@@ -139,6 +139,11 @@ class TraceOut(BaseModel):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
+class MemoryAddAccepted(BaseModel):
+    trace_id: uuid.UUID
+    status: str = "processing"
+
+
 class MemoryAddResponse(BaseModel):
     trace_id: uuid.UUID
     persisted: list[MemoryOut]
@@ -149,6 +154,14 @@ class MemoryAddResponse(BaseModel):
 class MemorySearchResponse(BaseModel):
     results: list[MemorySearchResult]
     rewritten_query: str
+
+
+class TraceStatusOut(BaseModel):
+    trace_id: uuid.UUID
+    status: str
+    persisted_count: int
+    rejected_count: int
+    error: str | None
 
 
 class AuditLogOut(BaseModel):

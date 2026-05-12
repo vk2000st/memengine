@@ -32,6 +32,21 @@ class Candidate:
 
 
 @dataclass
+class AddAccepted:
+    trace_id: str
+    status: str
+
+
+@dataclass
+class TraceStatus:
+    trace_id: str
+    status: str
+    persisted_count: int
+    rejected_count: int
+    error: str | None
+
+
+@dataclass
 class AddResult:
     trace_id: str
     persisted: list[Memory]

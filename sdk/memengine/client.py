@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from .exceptions import AuthError, ConflictError, MemEngineError, NotFoundError, ValidationError
-from .models import AddResult, Agent, AuditEntry, Candidate, Memory, SearchResponse, SearchResult, Trace
+from .models import AddAccepted, AddResult, Agent, AuditEntry, Candidate, Memory, SearchResponse, SearchResult, Trace, TraceStatus
 
 
 class MemEngine:
@@ -107,16 +107,17 @@ class MemEngine:
         messages: list[dict[str, str]],
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> AddResult:
+    ) -> AddAccepted:
         """
-        Run the extraction pipeline on a conversation and persist memories.
+        Enqueue the extraction pipeline and return immediately (HTTP 202).
 
         :param agent_slug: Slug of the agent to use for extraction.
         :param user_id: Stable identifier for the end user.
         :param messages: List of ``{"role": "user"|"assistant", "content": "..."}`` dicts.
         :param session_id: Optional session grouping key.
         :param metadata: Arbitrary key/value pairs attached to persisted memories.
-        :returns: :class:`AddResult` with ``persisted``, ``rejected``, ``candidates``, and ``trace_id``.
+        :returns: :class:`AddAccepted` with ``trace_id`` and ``status="processing"``.
+                  Poll :meth:`get_trace_status` to check completion.
         """
         payload: dict[str, Any] = {"agent_slug": agent_slug, "user_id": user_id, "messages": messages}
         if session_id is not None:
@@ -127,12 +128,7 @@ class MemEngine:
         response = self._http.post("/memory/add", json=payload, headers=self._auth_headers())
         self._raise(response)
         data = response.json()
-        return AddResult(
-            trace_id=data["trace_id"],
-            persisted=[_parse_memory(m) for m in data["persisted"]],
-            rejected=[_parse_candidate(c) for c in data["rejected"]],
-            candidates=[_parse_candidate(c) for c in data["candidates"]],
-        )
+        return AddAccepted(trace_id=data["trace_id"], status=data["status"])
 
     def search(
         self,
@@ -212,6 +208,24 @@ class MemEngine:
         response = self._http.get(f"/trace/{trace_id}", headers=self._auth_headers())
         self._raise(response)
         return _parse_trace(response.json())
+
+    def get_trace_status(self, trace_id: str) -> TraceStatus:
+        """
+        Poll the status of an async :meth:`add` call.
+
+        :returns: :class:`TraceStatus` with ``status`` (``"processing"`` | ``"completed"`` | ``"failed"``),
+                  ``persisted_count``, ``rejected_count``, and ``error``.
+        """
+        response = self._http.get(f"/trace/{trace_id}/status", headers=self._auth_headers())
+        self._raise(response)
+        data = response.json()
+        return TraceStatus(
+            trace_id=data["trace_id"],
+            status=data["status"],
+            persisted_count=data["persisted_count"],
+            rejected_count=data["rejected_count"],
+            error=data.get("error"),
+        )
 
     def list_rejected(self, trace_id: str) -> list[Candidate]:
         """

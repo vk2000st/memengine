@@ -1,6 +1,6 @@
 from .client import MemEngine
 from .exceptions import AuthError, ConflictError, MemEngineError, NotFoundError, ValidationError
-from .models import AddResult, Agent, AuditEntry, Candidate, Memory, SearchResponse, SearchResult, Trace
+from .models import AddAccepted, AddResult, Agent, AuditEntry, Candidate, Memory, SearchResponse, SearchResult, Trace, TraceStatus
 
 __all__ = [
     "MemEngine",

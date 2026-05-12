@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import structlog
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from qdrant_client import QdrantClient
@@ -19,7 +19,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import get_settings
 from app.models.db import (
     Agent, AuditLog, Company, Memory, MemoryCandidate,
-    PipelineTrace, get_db, get_engine, utcnow,
+    PipelineTrace, get_db, get_engine, get_session_factory, utcnow,
 )
 from app.schemas.memory import (
     AgentCreate, AgentOut,
@@ -28,10 +28,10 @@ from app.schemas.memory import (
     AuditLogOut,
     CandidateOut,
     CompanyCreate, CompanyCreated, CompanyOut,
-    MemoryAddRequest, MemoryAddResponse,
+    MemoryAddAccepted, MemoryAddRequest,
     MemoryOut,
     MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
-    TraceOut,
+    TraceOut, TraceStatusOut,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
 
@@ -291,14 +291,52 @@ async def get_agent(
 
 # ── Memory routes ────────────────────────────────────────────────────────────
 
-@app.post("/memory/add", response_model=MemoryAddResponse, tags=["Memory"])
+async def _run_pipeline_background(
+    trace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    messages: list[dict],
+    user_id: str,
+    session_id: str | None,
+    extra_metadata: dict,
+) -> None:
+    """Background task: run the full extraction pipeline after the HTTP response is sent."""
+    factory = get_session_factory()
+    async with factory() as db:
+        trace_row = await db.execute(select(PipelineTrace).where(PipelineTrace.id == trace_id))
+        trace = trace_row.scalar_one()
+        agent_row = await db.execute(select(Agent).where(Agent.id == agent_id))
+        agent = agent_row.scalar_one()
+        try:
+            await run_pipeline(
+                trace=trace,
+                messages=messages,
+                agent=agent,
+                user_id=user_id,
+                session_id=session_id,
+                extra_metadata=extra_metadata,
+                db=db,
+                qdrant_client=_qdrant,
+            )
+            log.info("bg_pipeline_complete", trace_id=str(trace_id))
+        except Exception as e:
+            trace.status = "failed"
+            trace.error = str(e)
+            trace.completed_at = utcnow()
+            await db.commit()
+            log.error("bg_pipeline_failed", trace_id=str(trace_id), error=str(e))
+
+
+@app.post("/memory/add", response_model=MemoryAddAccepted, status_code=202, tags=["Memory"])
 async def add_memory(
     payload: MemoryAddRequest,
+    background_tasks: BackgroundTasks,
     company: Company = Depends(get_company),
     db: AsyncSession = Depends(get_db),
-    qdrant: QdrantClient = Depends(get_qdrant),
 ):
-    """Run the extraction pipeline on a conversation and persist resulting memories."""
+    """
+    Enqueue the extraction pipeline and return immediately.
+    Poll GET /trace/{trace_id}/status to check completion.
+    """
     agent = await get_agent_by_slug(payload.agent_slug, company, db)
 
     trace = PipelineTrace(
@@ -310,40 +348,21 @@ async def add_memory(
         status="processing",
     )
     db.add(trace)
-    await db.flush()  # get trace.id before pipeline starts
+    await db.flush()
+    await db.commit()  # persisted before the background task starts
 
-    try:
-        persisted_memories, persisted_candidates, rejected_candidates = await run_pipeline(
-            trace=trace,
-            messages=[m.model_dump() for m in payload.messages],
-            agent=agent,
-            user_id=payload.user_id,
-            session_id=payload.session_id,
-            extra_metadata=payload.metadata,
-            db=db,
-            qdrant_client=qdrant,
-        )
-    except Exception as e:
-        trace.status = "failed"
-        trace.error = str(e)
-        trace.completed_at = utcnow()
-        await db.commit()
-        log.error("pipeline_failed", trace_id=str(trace.id), error=str(e))
-        raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
-
-    log.info(
-        "pipeline_complete",
-        trace_id=str(trace.id),
-        persisted=len(persisted_memories),
-        rejected=len(rejected_candidates),
-    )
-
-    return MemoryAddResponse(
+    background_tasks.add_task(
+        _run_pipeline_background,
         trace_id=trace.id,
-        persisted=[_memory_to_schema(m) for m in persisted_memories],
-        rejected=[CandidateOut.model_validate(c) for c in rejected_candidates],
-        candidates=[CandidateOut.model_validate(c) for c in (persisted_candidates + rejected_candidates)],
+        agent_id=agent.id,
+        messages=[m.model_dump() for m in payload.messages],
+        user_id=payload.user_id,
+        session_id=payload.session_id,
+        extra_metadata=payload.metadata,
     )
+
+    log.info("memory_add_enqueued", trace_id=str(trace.id), agent=agent.slug, user=payload.user_id)
+    return MemoryAddAccepted(trace_id=trace.id, status="processing")
 
 
 @app.post("/memory/search", response_model=MemorySearchResponse, tags=["Memory"])
@@ -433,6 +452,46 @@ async def delete_memory(
 
 
 # ── Observability routes ─────────────────────────────────────────────────────
+
+@app.get("/trace/{trace_id}/status", response_model=TraceStatusOut, tags=["Observability"])
+async def get_trace_status(
+    trace_id: uuid.UUID,
+    company: Company = Depends(get_company),
+    db: AsyncSession = Depends(get_db),
+):
+    """Poll pipeline status for an async /memory/add call."""
+    result = await db.execute(
+        select(PipelineTrace).where(
+            PipelineTrace.id == trace_id,
+            PipelineTrace.company_id == company.id,
+        )
+    )
+    trace = result.scalar_one_or_none()
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found")
+
+    persisted_count: int = (await db.execute(
+        select(func.count(MemoryCandidate.id)).where(
+            MemoryCandidate.trace_id == trace_id,
+            MemoryCandidate.final_decision == "persist",
+        )
+    )).scalar_one()
+
+    rejected_count: int = (await db.execute(
+        select(func.count(MemoryCandidate.id)).where(
+            MemoryCandidate.trace_id == trace_id,
+            MemoryCandidate.final_decision == "reject",
+        )
+    )).scalar_one()
+
+    return TraceStatusOut(
+        trace_id=trace.id,
+        status=trace.status,
+        persisted_count=persisted_count,
+        rejected_count=rejected_count,
+        error=trace.error,
+    )
+
 
 @app.get("/trace/{trace_id}", response_model=TraceOut, tags=["Observability"])
 async def get_trace(
