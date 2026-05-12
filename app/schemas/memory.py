@@ -310,3 +310,14 @@ class PlaygroundSessionOut(BaseModel):
     user_id: str
     agent_slug: str
     api_key: str
+
+
+class PlaygroundChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    memories: list[dict] = Field(default_factory=list)
+    session_id: str = Field(..., min_length=1)
+
+
+class PlaygroundChatResponse(BaseModel):
+    response: str
+    memories_used: int

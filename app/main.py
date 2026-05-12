@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
+import litellm
 import structlog
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
@@ -32,7 +33,7 @@ from app.schemas.memory import (
     MemoryAddAccepted, MemoryAddRequest,
     MemoryOut,
     MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
-    PlaygroundSessionOut,
+    PlaygroundChatRequest, PlaygroundChatResponse, PlaygroundSessionOut,
     TraceOut, TraceReportCreate, TraceReportOut, TraceStatusOut,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
@@ -40,9 +41,9 @@ from app.services.extraction.pipeline import run_pipeline, run_search
 log = structlog.get_logger()
 settings = get_settings()
 
-# In-memory rate-limit store for the playground endpoint: IP → list[request_time]
+# In-memory rate limiters for public playground endpoints: IP → list[request_time]
 _playground_rate: dict[str, list[datetime]] = defaultdict(list)
-_PLAYGROUND_LIMIT = 20
+_chat_rate: dict[str, list[datetime]] = defaultdict(list)
 _PLAYGROUND_WINDOW = timedelta(hours=1)
 
 
@@ -50,9 +51,19 @@ def _playground_rate_ok(ip: str) -> bool:
     now = datetime.now(timezone.utc)
     cutoff = now - _PLAYGROUND_WINDOW
     _playground_rate[ip] = [t for t in _playground_rate[ip] if t > cutoff]
-    if len(_playground_rate[ip]) >= _PLAYGROUND_LIMIT:
+    if len(_playground_rate[ip]) >= 20:
         return False
     _playground_rate[ip].append(now)
+    return True
+
+
+def _chat_rate_ok(ip: str) -> bool:
+    now = datetime.now(timezone.utc)
+    cutoff = now - _PLAYGROUND_WINDOW
+    _chat_rate[ip] = [t for t in _chat_rate[ip] if t > cutoff]
+    if len(_chat_rate[ip]) >= 10:
+        return False
+    _chat_rate[ip].append(now)
     return True
 
 
@@ -1074,6 +1085,52 @@ async def create_playground_session(request: Request):
         agent_slug=settings.demo_agent_slug,
         api_key=settings.demo_api_key,
     )
+
+
+_SUPPORT_SYSTEM = (
+    "You are a helpful customer support assistant for a SaaS product. "
+    "Keep responses concise — 2 to 3 sentences max. "
+    "If memories are provided about this user, use them naturally in your response "
+    "without saying 'I remember' or 'Based on my memory'. Just use the context naturally."
+)
+_CHAT_MODEL = "anthropic/claude-sonnet-4-20250514"
+
+
+@app.post("/playground/chat", response_model=PlaygroundChatResponse, tags=["Playground"])
+async def playground_chat(payload: PlaygroundChatRequest, request: Request):
+    """
+    Public endpoint — no auth required. Rate limited: 10 calls per IP per hour.
+    Calls Claude Sonnet 4 via LiteLLM. Returns a mock response if ANTHROPIC_API_KEY is not set.
+    """
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host or "unknown").split(",")[0].strip()
+    if not _chat_rate_ok(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 10 chat messages per IP per hour.")
+
+    valid_memories = [m for m in payload.memories if m.get("content")]
+    memories_used = len(valid_memories)
+
+    system = _SUPPORT_SYSTEM
+    if valid_memories:
+        context = "\n".join(m["content"] for m in valid_memories)
+        system += f"\n\nWhat you know about this user:\n{context}"
+
+    if not settings.anthropic_api_key:
+        return PlaygroundChatResponse(
+            response="Hi! This is a mock response — ANTHROPIC_API_KEY is not configured. Set it to enable Claude.",
+            memories_used=memories_used,
+        )
+
+    result = await litellm.acompletion(
+        model=_CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": payload.message},
+        ],
+        max_tokens=200,
+        api_key=settings.anthropic_api_key,
+    )
+    text = result.choices[0].message.content or ""
+    return PlaygroundChatResponse(response=text, memories_used=memories_used)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
