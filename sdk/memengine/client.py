@@ -69,19 +69,16 @@ class MemEngine:
 
     def create_agent(
         self,
-        slug: str,
+        agent_slug: str,
         name: str,
         extraction_instructions: str,
-        config: dict[str, Any] | None = None,
     ) -> Agent:
         """Create a new agent under the authenticated company."""
         payload: dict[str, Any] = {
-            "slug": slug,
+            "agent_slug": agent_slug,
             "name": name,
             "extraction_instructions": extraction_instructions,
         }
-        if config:
-            payload["config"] = config
         response = self._http.post("/agents", json=payload, headers=self._auth_headers())
         self._raise(response)
         return _parse_agent(response.json())
@@ -92,9 +89,9 @@ class MemEngine:
         self._raise(response)
         return [_parse_agent(a) for a in response.json()]
 
-    def get_agent(self, slug: str) -> Agent:
+    def get_agent(self, agent_slug: str) -> Agent:
         """Fetch a single agent by slug."""
-        response = self._http.get(f"/agents/{slug}", headers=self._auth_headers())
+        response = self._http.get(f"/agents/{agent_slug}", headers=self._auth_headers())
         self._raise(response)
         return _parse_agent(response.json())
 
@@ -336,10 +333,9 @@ def _parse_agent(d: dict[str, Any]) -> Agent:
     return Agent(
         id=d["id"],
         company_id=d["company_id"],
-        slug=d["slug"],
+        agent_slug=d["agent_slug"],
         name=d["name"],
         extraction_instructions=d["extraction_instructions"],
-        config=d.get("config", {}),
         is_active=d["is_active"],
         created_at=d["created_at"],
         updated_at=d["updated_at"],

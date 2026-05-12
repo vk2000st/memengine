@@ -322,7 +322,6 @@ async def create_agent(
         slug=payload.agent_slug,
         name=payload.name,
         extraction_instructions=payload.extraction_instructions,
-        config=payload.config,
     )
     db.add(agent)
     await db.commit()

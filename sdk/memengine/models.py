@@ -106,10 +106,9 @@ class AuditEntry:
 class Agent:
     id: str
     company_id: str
-    slug: str
+    agent_slug: str
     name: str
     extraction_instructions: str
-    config: dict[str, Any]
     is_active: bool
     created_at: str
     updated_at: str

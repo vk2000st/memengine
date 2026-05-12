@@ -31,10 +31,28 @@ class CompanyCreated(CompanyOut):
 # ── Agent ───────────────────────────────────────────────────────────────────
 
 class AgentCreate(BaseModel):
-    agent_slug: str = Field(..., pattern=r"^[a-z0-9_-]+$", min_length=1, max_length=100)
+    agent_slug: str = Field(
+        ...,
+        pattern=r"^[a-z0-9_-]+$",
+        min_length=1,
+        max_length=100,
+        description="Lowercase letters, numbers, hyphens and underscores only. Example: support-bot",
+    )
     name: str = Field(..., min_length=1, max_length=255)
     extraction_instructions: str = Field(..., min_length=10)
-    config: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "agent_slug": "support-bot",
+                "name": "Support Bot",
+                "extraction_instructions": (
+                    "Extract product issues, frustrations, feature requests, and resolution history. "
+                    "Skip pleasantries and greetings."
+                ),
+            }
+        }
+    }
 
 
 class AgentOut(BaseModel):
@@ -43,7 +61,6 @@ class AgentOut(BaseModel):
     agent_slug: str = Field(validation_alias="slug")
     name: str
     extraction_instructions: str
-    config: dict[str, Any]
     is_active: bool
     created_at: datetime
     updated_at: datetime

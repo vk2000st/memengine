@@ -10,14 +10,14 @@ print(f"   API key: {api_key}\n")
 
 print("2. Creating agent...")
 agent = client.create_agent(
-    slug="demo-agent",
+    agent_slug="demo-agent",
     name="Demo Agent",
     extraction_instructions=(
         "Extract long-term facts about the user: preferences, habits, goals, "
         "dietary needs, hobbies, and personal details. Skip small talk."
     ),
 )
-print(f"   Agent: {agent.slug} ({agent.id})\n")
+print(f"   Agent: {agent.agent_slug} ({agent.id})\n")
 
 print("3. Adding memory from conversation...")
 result = client.add(
