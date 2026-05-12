@@ -164,6 +164,16 @@ class TraceStatusOut(BaseModel):
     error: str | None
 
 
+class TraceReportCreate(BaseModel):
+    reason: str = Field(..., min_length=1)
+    note: str | None = None
+
+
+class TraceReportOut(BaseModel):
+    success: bool
+    report_id: uuid.UUID
+
+
 class AuditLogOut(BaseModel):
     id: uuid.UUID
     entity_type: str

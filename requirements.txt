@@ -13,3 +13,4 @@ tenacity>=8.3.0
 structlog>=24.1.0
 python-multipart>=0.0.9
 cryptography>=42.0.0
+postmarker>=1.0

@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 import uuid
 from collections import defaultdict
@@ -19,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import get_settings
 from app.models.db import (
     Agent, AuditLog, Company, Memory, MemoryCandidate,
-    PipelineTrace, get_db, get_engine, get_session_factory, utcnow,
+    PipelineTrace, TraceReport, get_db, get_engine, get_session_factory, utcnow,
 )
 from app.schemas.memory import (
     AgentCreate, AgentOut,
@@ -31,7 +32,7 @@ from app.schemas.memory import (
     MemoryAddAccepted, MemoryAddRequest,
     MemoryOut,
     MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
-    TraceOut, TraceStatusOut,
+    TraceOut, TraceReportCreate, TraceReportOut, TraceStatusOut,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
 
@@ -56,6 +57,67 @@ def decrypt_api_key(token: str) -> str | None:
         return _fernet().decrypt(token.encode()).decode()
     except (InvalidToken, Exception):
         return None
+
+
+# ── Email helper ─────────────────────────────────────────────────────────────
+
+async def _send_report_email(
+    company_name: str,
+    agent_slug: str,
+    agent_instructions: str,
+    user_id: str,
+    trace_id: uuid.UUID,
+    session_id: str | None,
+    created_at: datetime,
+    user_messages: list[str],
+    reason: str,
+    note: str | None,
+    persisted_count: int,
+    rejected_count: int,
+) -> None:
+    if not settings.postmark_server_token:
+        log.warning("postmark_not_configured_skipping_report_email")
+        return
+
+    conversation = "\n".join(f"- {m}" for m in user_messages) or "(no user messages)"
+    body = f"""New trace report from {company_name}
+
+Reason: {reason}
+Note: {note or "none"}
+
+Company: {company_name}
+Agent: {agent_slug}
+User: {user_id}
+Trace ID: {trace_id}
+Session: {session_id or "none"}
+Time: {created_at.isoformat()}
+
+User said:
+{conversation}
+
+Extraction instructions:
+{agent_instructions}
+
+Pipeline result: {persisted_count} persisted, {rejected_count} rejected
+
+View trace: https://redorb.tech/dashboard/traces?id={trace_id}
+"""
+
+    def _send() -> None:
+        from postmarker.core import PostmarkClient
+        client = PostmarkClient(server_token=settings.postmark_server_token)
+        client.emails.send(
+            From=settings.postmark_from,
+            To=settings.report_email_to,
+            Subject=f"New trace report — {company_name} / {agent_slug}",
+            TextBody=body,
+        )
+
+    try:
+        await asyncio.to_thread(_send)
+        log.info("report_email_sent", trace_id=str(trace_id), to=settings.report_email_to)
+    except Exception as e:
+        log.error("report_email_failed", trace_id=str(trace_id), error=str(e))
 
 
 _qdrant: QdrantClient | None = None
@@ -491,6 +553,76 @@ async def get_trace_status(
         rejected_count=rejected_count,
         error=trace.error,
     )
+
+
+@app.post("/trace/{trace_id}/report", response_model=TraceReportOut, status_code=201, tags=["Observability"])
+async def report_trace(
+    trace_id: uuid.UUID,
+    payload: TraceReportCreate,
+    company: Company = Depends(get_company),
+    db: AsyncSession = Depends(get_db),
+):
+    """Flag a pipeline trace for review and send an email notification."""
+    trace_row = await db.execute(
+        select(PipelineTrace).where(
+            PipelineTrace.id == trace_id,
+            PipelineTrace.company_id == company.id,
+        )
+    )
+    trace = trace_row.scalar_one_or_none()
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found")
+
+    agent_row = await db.execute(select(Agent).where(Agent.id == trace.agent_id))
+    agent = agent_row.scalar_one()
+
+    persisted_count: int = (await db.execute(
+        select(func.count(MemoryCandidate.id)).where(
+            MemoryCandidate.trace_id == trace_id,
+            MemoryCandidate.final_decision == "persist",
+        )
+    )).scalar_one()
+
+    rejected_count: int = (await db.execute(
+        select(func.count(MemoryCandidate.id)).where(
+            MemoryCandidate.trace_id == trace_id,
+            MemoryCandidate.final_decision == "reject",
+        )
+    )).scalar_one()
+
+    report = TraceReport(
+        trace_id=trace_id,
+        company_id=company.id,
+        reason=payload.reason,
+        note=payload.note,
+    )
+    db.add(report)
+    await db.commit()
+    await db.refresh(report)
+    log.info("trace_report_created", report_id=str(report.id), trace_id=str(trace_id))
+
+    user_messages = [
+        m["content"]
+        for m in (trace.input_messages or [])
+        if m.get("role") == "user"
+    ]
+
+    await _send_report_email(
+        company_name=company.name,
+        agent_slug=agent.slug,
+        agent_instructions=agent.extraction_instructions,
+        user_id=trace.user_id,
+        trace_id=trace_id,
+        session_id=trace.session_id,
+        created_at=trace.created_at,
+        user_messages=user_messages,
+        reason=payload.reason,
+        note=payload.note,
+        persisted_count=persisted_count,
+        rejected_count=rejected_count,
+    )
+
+    return TraceReportOut(success=True, report_id=report.id)
 
 
 @app.get("/trace/{trace_id}", response_model=TraceOut, tags=["Observability"])

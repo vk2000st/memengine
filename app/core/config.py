@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
 
+    # Postmark (for trace reports)
+    postmark_server_token: str = ""
+    postmark_from: str = ""
+    report_email_to: str = "vibhanshu.karn@gmail.com"
+
     # Pipeline tunables
     dedup_similarity_threshold: float = 0.85
     dedup_candidate_limit: int = 5
