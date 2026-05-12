@@ -1093,14 +1093,14 @@ _SUPPORT_SYSTEM = (
     "If memories are provided about this user, use them naturally in your response "
     "without saying 'I remember' or 'Based on my memory'. Just use the context naturally."
 )
-_CHAT_MODEL = "anthropic/claude-sonnet-4-20250514"
+_CHAT_MODEL = "openai/gpt-4o-mini"
 
 
 @app.post("/playground/chat", response_model=PlaygroundChatResponse, tags=["Playground"])
 async def playground_chat(payload: PlaygroundChatRequest, request: Request):
     """
     Public endpoint — no auth required. Rate limited: 10 calls per IP per hour.
-    Calls Claude Sonnet 4 via LiteLLM. Returns a mock response if ANTHROPIC_API_KEY is not set.
+    Calls gpt-4o-mini via LiteLLM. Returns a mock response if OPENAI_API_KEY is not set.
     """
     client_ip = request.headers.get("X-Forwarded-For", request.client.host or "unknown").split(",")[0].strip()
     if not _chat_rate_ok(client_ip):
@@ -1114,9 +1114,9 @@ async def playground_chat(payload: PlaygroundChatRequest, request: Request):
         context = "\n".join(m["content"] for m in valid_memories)
         system += f"\n\nWhat you know about this user:\n{context}"
 
-    if not settings.anthropic_api_key:
+    if not settings.openai_api_key:
         return PlaygroundChatResponse(
-            response="Hi! This is a mock response — ANTHROPIC_API_KEY is not configured. Set it to enable Claude.",
+            response="Hi! This is a mock response — OPENAI_API_KEY is not configured. Set it to enable chat.",
             memories_used=memories_used,
         )
 
@@ -1127,7 +1127,7 @@ async def playground_chat(payload: PlaygroundChatRequest, request: Request):
             {"role": "user", "content": payload.message},
         ],
         max_tokens=200,
-        api_key=settings.anthropic_api_key,
+        api_key=settings.openai_api_key,
     )
     text = result.choices[0].message.content or ""
     return PlaygroundChatResponse(response=text, memories_used=memories_used)
