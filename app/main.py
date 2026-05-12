@@ -465,7 +465,7 @@ async def search_memory(
     if payload.agent_slug:
         agent = await get_agent_by_slug(payload.agent_slug, company, db)
 
-    results, rewritten_query = await run_search(
+    results = await run_search(
         query=payload.query,
         company_id=company.id,
         agent=agent,
@@ -495,7 +495,7 @@ async def search_memory(
         for m, score, reason in results
     ]
 
-    return MemorySearchResponse(results=search_results, rewritten_query=rewritten_query)
+    return MemorySearchResponse(results=search_results)
 
 
 @app.delete("/memory/{memory_id}", status_code=204, tags=["Memory"])

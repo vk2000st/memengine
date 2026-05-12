@@ -73,7 +73,6 @@ class SearchResult:
 @dataclass
 class SearchResponse:
     results: list[SearchResult]
-    rewritten_query: str
 
 
 @dataclass

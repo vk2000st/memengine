@@ -196,7 +196,6 @@ class MemoryAddResponse(BaseModel):
 
 class MemorySearchResponse(BaseModel):
     results: list[MemorySearchResult]
-    rewritten_query: str
 
 
 class TraceStatusOut(BaseModel):

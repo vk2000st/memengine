@@ -141,7 +141,7 @@ class MemEngine:
         :param query: Natural-language search query.
         :param agent_slug: Optional — filter to a specific agent. Omit to search all agents.
         :param user_id: Optional — filter to a specific user. Omit to search all users.
-        :returns: :class:`SearchResponse` with ``results`` (ranked) and ``rewritten_query``.
+        :returns: :class:`SearchResponse` with ``results`` (ranked by similarity).
         """
         payload: dict[str, Any] = {"query": query, "limit": limit}
         if agent_slug is not None:
@@ -156,7 +156,6 @@ class MemEngine:
         data = response.json()
         return SearchResponse(
             results=[_parse_search_result(r) for r in data["results"]],
-            rewritten_query=data["rewritten_query"],
         )
 
     def list_memories(

@@ -428,18 +428,13 @@ async def run_search(
     session_id: str | None,
     db: AsyncSession,
     qdrant_client: Any,
-) -> tuple[list[tuple[Memory, float, str]], str]:
+) -> list[tuple[Memory, float, str]]:
     """
     Search memories scoped to company. agent and user_id are optional filters.
-    Returns ([(memory, score, reason)], rewritten_query).
+    Returns [(memory, score, reason)].
     """
-    # Rewrite query
-    rewrite_prompt = _fmt(_load_prompt("search_rewrite"), query=query)
-    rewritten_raw, _ = await _llm_call(rewrite_prompt, "search_rewrite")
-    rewritten_query = rewritten_raw.strip().strip('"')
-
     # Build Qdrant filter — company is always required, agent/user are optional
-    embedding = await _embed(rewritten_query)
+    embedding = await _embed(query)
     must_filters = [
         FieldCondition(key="company_id", match=MatchValue(value=str(company_id))),
         FieldCondition(key="deleted", match=MatchValue(value=False)),
@@ -490,4 +485,4 @@ async def run_search(
 
         results.append((memory, r.score, reason))
 
-    return results, rewritten_query
+    return results
