@@ -134,8 +134,9 @@ class TraceOut(BaseModel):
     created_at: datetime
     completed_at: datetime | None
     candidates: list[CandidateOut]
+    messages: list[dict] = Field(default_factory=list, validation_alias="input_messages")
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class MemoryAddResponse(BaseModel):
