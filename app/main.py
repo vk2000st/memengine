@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -193,6 +194,10 @@ app.add_middleware(
 )
 
 
+# ── Auth cache (avoids bcrypt on every request within the 5-min TTL) ─────────
+
+_auth_cache: dict[str, tuple[Company, float]] = {}
+
 # ── Auth dependency ──────────────────────────────────────────────────────────
 
 async def get_company(
@@ -203,6 +208,11 @@ async def get_company(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
     prefix = x_api_key[:8]
+
+    cached = _auth_cache.get(x_api_key)
+    if cached and time.time() - cached[1] < 300:
+        return cached[0]
+
     result = await db.execute(
         select(Company).where(Company.api_key_prefix == prefix, Company.is_active == True)
     )
@@ -213,6 +223,7 @@ async def get_company(
     if not bcrypt.checkpw(x_api_key.encode(), company.api_key_hash.encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
+    _auth_cache[x_api_key] = (company, time.time())
     return company
 
 
