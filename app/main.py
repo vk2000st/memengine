@@ -170,7 +170,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         _qdrant.create_collection(
             collection_name=settings.qdrant_collection,
-            vectors_config=VectorParams(size=settings.embedding_dim, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
         )
         log.info("qdrant_collection_created", name=settings.qdrant_collection)
 

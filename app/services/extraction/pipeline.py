@@ -2,6 +2,7 @@
 Full extraction pipeline: extract → classify → deduplicate → decide → persist.
 Every LLM call is logged onto the MemoryCandidate.llm_responses dict.
 """
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import litellm
+from fastembed import TextEmbedding
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -17,6 +19,7 @@ from app.core.config import get_settings
 from app.models.db import Agent, AuditLog, Memory, MemoryCandidate, PipelineTrace, utcnow
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
+_fastembed_model = TextEmbedding(model_name="BAAI/bge-large-en-v1.5")
 
 
 def _load_prompt(name: str) -> str:
@@ -59,11 +62,12 @@ async def _llm_call(prompt: str, step: str) -> tuple[str, dict]:
 
 
 async def _embed(text: str) -> list[float]:
-    response = await litellm.aembedding(
-        model=settings.embedding_model,
-        input=[text],
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: list(_fastembed_model.embed([text]))[0].tolist(),
     )
-    return response.data[0]["embedding"]
+    return result
 
 
 def _parse_json(raw: str) -> dict:

@@ -14,3 +14,4 @@ structlog>=24.1.0
 python-multipart>=0.0.9
 cryptography>=42.0.0
 postmarker>=1.0
+fastembed>=0.4.0
