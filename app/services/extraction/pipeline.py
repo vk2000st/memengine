@@ -23,6 +23,16 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / f"{name}.txt").read_text()
 
 
+def _make_retrieval_reason(score: float, category: str) -> str:
+    if score >= 0.8:
+        return f"Strong semantic match on {category} memory"
+    if score >= 0.6:
+        return f"Good semantic match on {category} memory"
+    if score >= 0.4:
+        return f"Moderate semantic match on {category} memory"
+    return f"Weak semantic match on {category} memory"
+
+
 def _fmt(template: str, **kwargs: Any) -> str:
     for key, value in kwargs.items():
         template = template.replace("{" + key + "}", str(value))
@@ -475,13 +485,7 @@ async def run_search(
         if not memory:
             continue
 
-        reason_prompt = _fmt(
-            _load_prompt("retrieval_reason"),
-            query=query,
-            memory_content=memory.content,
-        )
-        reason_raw, _ = await _llm_call(reason_prompt, "retrieval_reason")
-        reason = reason_raw.strip().strip('"')
+        reason = _make_retrieval_reason(r.score, memory.memory_type)
 
         results.append((memory, r.score, reason))
 
