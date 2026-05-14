@@ -263,6 +263,51 @@ async def _dedup_decide_step(
         return [], 0
 
 
+async def _fetch_existing_memories(
+    agent: Agent,
+    user_id: str,
+    db: AsyncSession,
+    qdrant_client: Any,
+    limit: int = 50,
+) -> list[dict]:
+    """Fetch all non-deleted memories for agent+user via Qdrant scroll, then hydrate from Postgres."""
+    try:
+        scroll_result = qdrant_client.scroll(
+            collection_name=settings.qdrant_collection,
+            scroll_filter=Filter(must=[
+                FieldCondition(key="agent_id", match=MatchValue(value=str(agent.id))),
+                FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                FieldCondition(key="deleted", match=MatchValue(value=False)),
+            ]),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        points = scroll_result[0]
+
+        memories = []
+        for point in points:
+            mem_id_str = point.payload.get("memory_id")
+            if not mem_id_str:
+                continue
+            try:
+                mem_id = uuid.UUID(mem_id_str)
+            except ValueError:
+                continue
+            result = await db.execute(select(Memory).where(Memory.id == mem_id, Memory.deleted_at.is_(None)))
+            memory = result.scalar_one_or_none()
+            if not memory:
+                continue
+            memories.append({
+                "memory_id": str(memory.id),
+                "memory_type": memory.memory_type,
+                "content": memory.content,
+            })
+        return memories
+    except Exception:
+        return []
+
+
 async def _persist_memory(
     candidate: MemoryCandidate,
     agent: Agent,
