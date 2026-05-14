@@ -466,6 +466,7 @@ async def run_search(
         limit=limit,
         query_filter=Filter(must=must_filters),
         with_payload=True,
+        score_threshold=0.3,
     )
 
     results = []

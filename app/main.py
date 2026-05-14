@@ -12,7 +12,7 @@ import structlog
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from sqlalchemy import case, func, literal, or_, select
@@ -704,6 +704,67 @@ async def get_memory_audit(
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "version": "1.0.0"}
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    content = (
+        "User-agent: *\n"
+        "Disallow: /\n"
+        "\n"
+        "# AI crawlers\n"
+        "User-agent: GPTBot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: ChatGPT-User\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: CCBot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: anthropic-ai\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Claude-Web\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: cohere-ai\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: PerplexityBot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: YouBot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Googlebot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Googlebot-Image\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Bingbot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Slurp\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: DuckDuckBot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Baiduspider\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: YandexBot\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: facebookexternalhit\n"
+        "Disallow: /\n"
+        "\n"
+        "User-agent: Twitterbot\n"
+        "Disallow: /\n"
+    )
+    return PlainTextResponse(content, media_type="text/plain")
 
 
 # ── Analytics routes ─────────────────────────────────────────────────────────
