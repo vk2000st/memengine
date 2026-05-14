@@ -238,7 +238,7 @@ async def _dedup_decide_step(
     """Returns (decisions_list, tokens). Combines dedup and decide in one LLM call."""
     if existing_memories:
         existing_str = "\n".join(
-            f"[{i+1}] ID={m['memory_id']} ({m['memory_type']}): {m['content']}"
+            f"[{i+1}] ID={m['memory_id']}: {m['content']}"
             for i, m in enumerate(existing_memories)
         )
     else:
