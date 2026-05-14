@@ -8,12 +8,14 @@ Analyze the conversation below and extract memory candidates. Focus only on info
 - Is factual, stable, or reflects the user's preferences, goals, relationships, or important events
 - Would be useful to know in future conversations with this user
 - Is not ephemeral small talk or temporary state
+- State changes and life updates (moving cities, changing jobs, switching preferences, starting or stopping something)
 
 Do NOT extract:
 - Greetings, pleasantries, or filler content
 - Questions the user asked (unless they reveal a preference or goal)
 - Obvious or universally known facts
 - Content that is too vague to be actionable
+- Do NOT skip messages just because they use casual language like "btw", "hey", "you know", "actually" — if the underlying content contains a personal fact or state change, always extract it
 
 ## Conversation
 {messages}
