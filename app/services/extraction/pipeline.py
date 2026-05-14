@@ -285,25 +285,35 @@ async def _fetch_existing_memories(
         )
         points = scroll_result[0]
 
-        memories = []
+        mem_ids = []
         for point in points:
             mem_id_str = point.payload.get("memory_id")
             if not mem_id_str:
                 continue
             try:
-                mem_id = uuid.UUID(mem_id_str)
+                mem_ids.append(uuid.UUID(mem_id_str))
             except ValueError:
                 continue
-            result = await db.execute(select(Memory).where(Memory.id == mem_id, Memory.deleted_at.is_(None)))
-            memory = result.scalar_one_or_none()
-            if not memory:
-                continue
-            memories.append({
-                "memory_id": str(memory.id),
-                "memory_type": memory.memory_type,
-                "content": memory.content,
-            })
-        return memories
+
+        if not mem_ids:
+            return []
+
+        result = await db.execute(
+            select(Memory).where(
+                Memory.id.in_(mem_ids),
+                Memory.deleted_at.is_(None),
+            )
+        )
+        memories_db = result.scalars().all()
+
+        return [
+            {
+                "memory_id": str(m.id),
+                "memory_type": m.memory_type,
+                "content": m.content,
+            }
+            for m in memories_db
+        ]
     except Exception:
         return []
 
