@@ -11,16 +11,30 @@ You are a memory deduplication specialist. Determine whether a new memory candid
 - new: The candidate contains information not already captured in any existing memory. Use this when the candidate is about a genuinely different topic.
 
 - update: The candidate should REPLACE an existing memory. Use this when:
-  * The candidate directly contradicts an existing memory (e.g. location changed, preference reversed, plan changed)
-  * The candidate provides a newer version of the same fact (e.g. old job → new job, old city → new city)
-  * The candidate negates an existing memory (e.g. "dog passed away" supersedes "has a dog named Max")
-  * The candidate is an extension of an existing memory (e.g. "speaks English, Hindi, and Spanish" supersedes "speaks English and Hindi")
-  * An event implies a state change (e.g. "I moved to Delhi" means current location is Delhi — this supersedes "lives in Bangalore")
+  * The candidate directly contradicts an existing memory (e.g. "User lives in Delhi" contradicts "User lives in Bangalore" — update it)
+  * The candidate provides a newer version of the same fact (e.g. old job → new job, old city → new city, old plan → new plan)
+  * The candidate negates an existing memory (e.g. "User's dog passed away" supersedes "User has a dog named Max")
+  * The candidate extends an existing memory (e.g. "User speaks English, Hindi, and Spanish" supersedes "User speaks English and Hindi")
+  * An event implies a state change (e.g. "User moved to Delhi" → current location is Delhi, supersedes "User lives in Bangalore")
+  * A preference reversal (e.g. "User switched to light mode" supersedes "User prefers dark mode")
 
 - duplicate: The candidate conveys exactly the same information as an existing memory — no new value added.
 
-## Important
-When a user says something happened (e.g. "I moved", "I switched", "I upgraded", "I stopped"), treat it as a state change that supersedes the old state — not as a new independent fact.
+## Critical Rules
+1. When a user says they moved, switched, changed, upgraded, stopped, or started something — always treat it as a state change that supersedes the old state. Do NOT create a new memory alongside the old one.
+2. Location facts are always singular — a user can only live in one place. New location always supersedes old.
+3. Job/role facts are always singular — new role always supersedes old.
+4. Preferences can reverse — new preference always supersedes old conflicting preference.
+5. Only use "new" when the candidate is clearly about a different topic with no overlap.
+
+## Examples
+- Existing: "User lives in Bangalore" | New: "User lives in Delhi now" → update (location changed)
+- Existing: "User lives in Bangalore" | New: "User moved to Delhi yesterday" → update (move event = location state change)
+- Existing: "User prefers dark mode" | New: "User switched to light mode" → update (preference reversed)
+- Existing: "User works at Google" | New: "User joined Microsoft" → update (job changed)
+- Existing: "User speaks English" | New: "User speaks English and Hindi" → update (extended)
+- Existing: "User has a MacBook issue" | New: "User likes pasta" → new (different topic)
+- Existing: "User lives in Bangalore" | New: "User likes pasta" → new (different topic)
 
 ## Output Format
 Respond with a JSON object:
