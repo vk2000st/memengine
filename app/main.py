@@ -400,12 +400,16 @@ async def _run_pipeline_background(
 ) -> None:
     """Background task: run the full extraction pipeline after the HTTP response is sent."""
     factory = get_session_factory()
+    log.info("bg_pipeline_start", trace_id=str(trace_id))
     async with factory() as db:
         trace_row = await db.execute(select(PipelineTrace).where(PipelineTrace.id == trace_id))
         trace = trace_row.scalar_one()
+        log.info("bg_pipeline_trace_fetched", trace_id=str(trace_id))
         agent_row = await db.execute(select(Agent).where(Agent.id == agent_id))
         agent = agent_row.scalar_one()
+        log.info("bg_pipeline_agent_fetched", trace_id=str(trace_id), agent_id=str(agent_id))
         try:
+            log.info("bg_pipeline_running", trace_id=str(trace_id))
             await run_pipeline(
                 trace=trace,
                 messages=messages,
