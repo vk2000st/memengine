@@ -216,7 +216,7 @@ async def _extract_classify_step(
     agent: Agent,
 ) -> tuple[list[dict], int]:
     """Returns (candidates_list, tokens). Combines extraction and classification in one LLM call."""
-    conversation = "\n".join(f"{m['role']}: {m['content']}" for m in messages if m.get("role") == "user")
+    conversation = "\n".join(f"{m['role']}: {m['content']}" for m in messages if m.get("content"))
     prompt = _fmt(
         _load_prompt("extract_classify"),
         messages=conversation,
