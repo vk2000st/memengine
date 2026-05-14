@@ -476,6 +476,7 @@ async def run_pipeline(
         return persisted_memories, persisted_candidates, rejected_candidates
 
     # ── Step 2: Fetch existing memories ─────────────────────────────────────
+    await db.flush()
     existing_memories = await _fetch_existing_memories(agent, user_id, db, qdrant_client, limit=50)
 
     # ── Step 3: Dedup + Decide ───────────────────────────────────────────────
