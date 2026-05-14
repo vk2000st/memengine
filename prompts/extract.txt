@@ -16,6 +16,7 @@ Do NOT extract:
 - Obvious or universally known facts
 - Content that is too vague to be actionable
 - Do NOT skip messages just because they use casual language like "btw", "hey", "you know", "actually" — if the underlying content contains a personal fact or state change, always extract it
+- Random characters, gibberish, typos, or messages with no intelligible meaning — if a message cannot be understood, return empty candidates
 
 ## Conversation
 {messages}
