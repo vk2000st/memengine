@@ -272,16 +272,20 @@ async def _fetch_existing_memories(
 ) -> list[dict]:
     """Fetch all non-deleted memories for agent+user via Qdrant scroll, then hydrate from Postgres."""
     try:
-        scroll_result = qdrant_client.scroll(
-            collection_name=settings.qdrant_collection,
-            scroll_filter=Filter(must=[
-                FieldCondition(key="agent_id", match=MatchValue(value=str(agent.id))),
-                FieldCondition(key="user_id", match=MatchValue(value=user_id)),
-                FieldCondition(key="deleted", match=MatchValue(value=False)),
-            ]),
-            limit=limit,
-            with_payload=True,
-            with_vectors=False,
+        loop = asyncio.get_running_loop()
+        scroll_result = await loop.run_in_executor(
+            None,
+            lambda: qdrant_client.scroll(
+                collection_name=settings.qdrant_collection,
+                scroll_filter=Filter(must=[
+                    FieldCondition(key="agent_id", match=MatchValue(value=str(agent.id))),
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="deleted", match=MatchValue(value=False)),
+                ]),
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
         )
         points = scroll_result[0]
 
