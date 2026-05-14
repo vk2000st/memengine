@@ -62,7 +62,7 @@ def _chat_rate_ok(ip: str) -> bool:
     now = datetime.now(timezone.utc)
     cutoff = now - _PLAYGROUND_WINDOW
     _chat_rate[ip] = [t for t in _chat_rate[ip] if t > cutoff]
-    if len(_chat_rate[ip]) >= 10:
+    if len(_chat_rate[ip]) >= 50:
         return False
     _chat_rate[ip].append(now)
     return True
