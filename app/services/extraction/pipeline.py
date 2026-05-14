@@ -211,6 +211,58 @@ async def _decide_step(
     return parsed["decision"], parsed.get("rejection_reason"), usage["total_tokens"]
 
 
+async def _extract_classify_step(
+    messages: list[dict],
+    agent: Agent,
+) -> tuple[list[dict], int]:
+    """Returns (candidates_list, tokens). Combines extraction and classification in one LLM call."""
+    conversation = "\n".join(f"{m['role']}: {m['content']}" for m in messages if m.get("role") == "user")
+    prompt = _fmt(
+        _load_prompt("extract_classify"),
+        messages=conversation,
+        extraction_instructions=agent.extraction_instructions,
+    )
+    try:
+        raw, usage = await _llm_call(prompt, "extract_classify")
+        parsed = _parse_json(raw)
+        return parsed.get("candidates", []), usage["total_tokens"]
+    except Exception:
+        return [], 0
+
+
+async def _dedup_decide_step(
+    candidates: list[dict],
+    existing_memories: list[dict],
+    agent: Agent,
+) -> tuple[list[dict], int]:
+    """Returns (decisions_list, tokens). Combines dedup and decide in one LLM call."""
+    if existing_memories:
+        existing_str = "\n".join(
+            f"[{i+1}] ID={m['memory_id']} ({m['memory_type']}): {m['content']}"
+            for i, m in enumerate(existing_memories)
+        )
+    else:
+        existing_str = "None"
+
+    candidates_str = "\n".join(
+        f"[{i}] {c['content']} (type={c['memory_type']}, score={c['importance_score']})"
+        for i, c in enumerate(candidates)
+    )
+
+    prompt = _fmt(
+        _load_prompt("dedup_decide"),
+        candidates=candidates_str,
+        existing_memories=existing_str,
+        extraction_instructions=agent.extraction_instructions,
+    )
+    try:
+        raw, usage = await _llm_call(prompt, "dedup_decide")
+        parsed = _parse_json(raw)
+        return parsed.get("decisions", []), usage["total_tokens"]
+    except Exception:
+        return [], 0
+
+
 async def _persist_memory(
     candidate: MemoryCandidate,
     agent: Agent,
