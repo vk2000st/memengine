@@ -420,88 +420,121 @@ async def run_pipeline(
     qdrant_client: Any,
 ) -> tuple[list[Memory], list[MemoryCandidate], list[MemoryCandidate]]:
     """
-    Run the full 4-step pipeline.
+    Run the 2-step pipeline: extract+classify → dedup+decide.
     Returns (persisted_memories, persisted_candidates, rejected_candidates).
     """
-    total_tokens = 0
-    llm_calls = 0
-
-    # ── Step 1: Extract ──────────────────────────────────────────────────────
-    raw_candidates, tokens = await _extract_step(messages, agent, trace, db)
-    total_tokens += tokens
-    llm_calls += 1
-
     all_candidates: list[MemoryCandidate] = []
     persisted_memories: list[Memory] = []
     persisted_candidates: list[MemoryCandidate] = []
     rejected_candidates: list[MemoryCandidate] = []
 
+    # ── Step 1: Extract + Classify ───────────────────────────────────────────
+    raw_candidates, tokens_step1 = await _extract_classify_step(messages, agent)
+
     for raw in raw_candidates:
         content = raw.get("content", "").strip()
         if not content:
+            continue
+        importance = float(raw.get("importance_score", 0.0))
+        if importance < 0.3:
             continue
 
         candidate = MemoryCandidate(
             trace_id=trace.id,
             content=content,
-            llm_responses={"extract": {"rationale": raw.get("rationale", "")}},
+            memory_type=raw.get("memory_type", "fact"),
+            importance_score=importance,
+            llm_responses={
+                "extract_classify": {
+                    "rationale": raw.get("rationale", ""),
+                    "memory_type": raw.get("memory_type"),
+                    "importance_score": importance,
+                    "classify_reasoning": raw.get("classify_reasoning", ""),
+                }
+            },
         )
         db.add(candidate)
         all_candidates.append(candidate)
 
-        # ── Step 2: Classify ─────────────────────────────────────────────────
-        try:
-            mem_type, importance, tokens = await _classify_step(content, agent, candidate, db)
-            total_tokens += tokens
-            llm_calls += 1
-            candidate.memory_type = mem_type
-            candidate.importance_score = importance
-        except Exception as e:
-            candidate.memory_type = "fact"
-            candidate.importance_score = 0.5
-            candidate.llm_responses = {**candidate.llm_responses, "classify_error": str(e)}
+    # Early exit if nothing passed the importance filter
+    if not all_candidates:
+        trace.status = "completed"
+        trace.completed_at = utcnow()
+        trace.llm_calls_total = 1
+        trace.tokens_used = tokens_step1
+        await db.commit()
+        return persisted_memories, persisted_candidates, rejected_candidates
 
-        # ── Step 3: Deduplicate ───────────────────────────────────────────────
-        try:
-            similar = await _search_similar_memories(content, agent, user_id, qdrant_client)
-            dedup_decision, dedup_target_id, tokens = await _dedup_step(content, similar, candidate, db)
-            total_tokens += tokens
-            if tokens > 0:
-                llm_calls += 1
-            candidate.dedup_decision = dedup_decision
-            candidate.dedup_target_id = uuid.UUID(dedup_target_id) if dedup_target_id else None
-        except Exception as e:
+    # ── Step 2: Fetch existing memories ─────────────────────────────────────
+    existing_memories = await _fetch_existing_memories(agent, user_id, db, qdrant_client, limit=50)
+
+    # ── Step 3: Dedup + Decide ───────────────────────────────────────────────
+    candidates_dicts = [
+        {
+            "content": c.content,
+            "memory_type": c.memory_type or "fact",
+            "importance_score": c.importance_score or 0.5,
+        }
+        for c in all_candidates
+    ]
+
+    decisions, tokens_step3 = await _dedup_decide_step(candidates_dicts, existing_memories, agent)
+
+    # Build index → decision map; default to persist if decisions are missing
+    decision_map: dict[int, dict] = {d["candidate_index"]: d for d in decisions}
+
+    for idx, candidate in enumerate(all_candidates):
+        decision = decision_map.get(idx)
+
+        if decision is None:
+            # Fallback: persist if score qualifies
+            action = "persist"
             dedup_decision = "new"
-            dedup_target_id = None
-            candidate.dedup_decision = "new"
-            candidate.llm_responses = {**candidate.llm_responses, "dedup_error": str(e)}
+            dedup_target_id_str = None
+            rejection_reason = None
+        else:
+            action = decision.get("action", "persist")
+            supersedes_id = decision.get("supersedes_id")
+            rejection_category = decision.get("rejection_category")
+            rejection_reason_raw = decision.get("rejection_reason")
 
-        # ── Step 4: Decide ───────────────────────────────────────────────────
-        try:
-            decision, rejection_reason, tokens = await _decide_step(
-                content,
-                candidate.memory_type or "fact",
-                candidate.importance_score or 0.5,
-                dedup_decision,
-                agent,
-                candidate,
-                db,
-            )
-            total_tokens += tokens
-            llm_calls += 1
-        except Exception as e:
-            decision = "persist" if (candidate.importance_score or 0) >= 0.3 else "reject"
-            rejection_reason = None if decision == "persist" else "decide_step_error"
-            candidate.llm_responses = {**candidate.llm_responses, "decide_error": str(e)}
+            if action == "persist":
+                dedup_decision = "new"
+                dedup_target_id_str = None
+                rejection_reason = None
+            elif action == "update":
+                dedup_decision = "update"
+                dedup_target_id_str = supersedes_id
+                rejection_reason = None
+            elif action == "duplicate":
+                dedup_decision = "duplicate"
+                dedup_target_id_str = None
+                rejection_reason = "duplicate"
+            else:  # reject
+                dedup_decision = "new"
+                dedup_target_id_str = None
+                rejection_reason = rejection_category or rejection_reason_raw or "rejected"
 
-        candidate.final_decision = decision
-        candidate.rejection_reason = rejection_reason
+        candidate.dedup_decision = dedup_decision
+        candidate.dedup_target_id = None
+        if dedup_target_id_str:
+            try:
+                candidate.dedup_target_id = uuid.UUID(dedup_target_id_str)
+            except ValueError:
+                pass
 
-        if decision == "persist":
+        candidate.llm_responses = {
+            **candidate.llm_responses,
+            "dedup_decide": decision or {"action": "persist", "fallback": True},
+        }
+
+        if action in ("persist", "update"):
+            candidate.final_decision = "persist"
+            candidate.rejection_reason = None
             try:
                 memory = await _persist_memory(
                     candidate, agent, user_id, session_id,
-                    dedup_decision, str(dedup_target_id) if dedup_target_id else None,
+                    dedup_decision, dedup_target_id_str,
                     extra_metadata, db, qdrant_client,
                 )
                 persisted_memories.append(memory)
@@ -511,17 +544,18 @@ async def run_pipeline(
                 candidate.rejection_reason = f"persist_error: {e}"
                 rejected_candidates.append(candidate)
         else:
+            candidate.final_decision = "reject"
+            candidate.rejection_reason = rejection_reason
             rejected_candidates.append(candidate)
 
-    # ── Finalize trace ───────────────────────────────────────────────────────
+    # ── Step 4: Finalize trace ───────────────────────────────────────────────
     trace.status = "completed"
     trace.completed_at = utcnow()
-    trace.llm_calls_total = llm_calls
-    trace.tokens_used = total_tokens
+    trace.llm_calls_total = 2
+    trace.tokens_used = tokens_step1 + tokens_step3
 
     await db.commit()
 
-    # Refresh candidates to get generated IDs
     for c in all_candidates:
         await db.refresh(c)
     for m in persisted_memories:
