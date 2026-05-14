@@ -399,6 +399,7 @@ async def _run_pipeline_background(
     extra_metadata: dict,
 ) -> None:
     """Background task: run the full extraction pipeline after the HTTP response is sent."""
+    log.info("bg_pipeline_entered", trace_id=str(trace_id))
     factory = get_session_factory()
     log.info("bg_pipeline_start", trace_id=str(trace_id))
     async with factory() as db:
