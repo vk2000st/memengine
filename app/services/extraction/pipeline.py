@@ -477,10 +477,16 @@ async def run_pipeline(
                     "memory_type": raw.get("memory_type"),
                     "importance_score": importance,
                     "classify_reasoning": raw.get("classify_reasoning", ""),
+                    "is_structured": raw.get("is_structured", False),
+                    "relation_label": raw.get("relation_label"),
+                    "object_value": raw.get("object_value"),
                 }
             },
         )
         db.add(candidate)
+        setattr(candidate, '_is_structured', raw.get("is_structured", False))
+        setattr(candidate, '_relation_label', raw.get("relation_label"))
+        setattr(candidate, '_object_value', raw.get("object_value"))
         all_candidates.append(candidate)
 
     # Early exit if nothing passed the importance filter
