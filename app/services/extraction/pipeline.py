@@ -18,6 +18,10 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.models.db import Agent, AuditLog, Memory, MemoryCandidate, PipelineTrace, utcnow
+from app.graph.client import get_user_graph
+from app.graph.schema import init_graph
+from app.graph.dedup import graph_dedup
+from app.graph.persist import graph_persist
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 _fastembed_model = None
@@ -505,55 +509,124 @@ async def run_pipeline(
     existing_memories = await _fetch_existing_memories(agent, user_id, db, qdrant_client, limit=50)
     fetch_memories_ms = int((time.monotonic() - t1) * 1000)
 
+    # Initialize FalkorDB graph for this company+agent
+    falkordb_graph = None
+    try:
+        falkordb_graph = get_user_graph(str(agent.company_id), str(agent.id))
+        init_graph(falkordb_graph)
+    except Exception:
+        pass  # FalkorDB unavailable — fall back to vector dedup for all
+
     # ── Step 3: Dedup + Decide ───────────────────────────────────────────────
     t2 = time.monotonic()
-    candidates_dicts = [
-        {
-            "content": c.content,
-            "memory_type": c.memory_type or "fact",
-            "importance_score": c.importance_score or 0.5,
-        }
+
+    # Annotate candidates with their graph fields
+    structured_candidates = [
+        (c, getattr(c, '_is_structured', False), getattr(c, '_relation_label', None), getattr(c, '_object_value', None))
         for c in all_candidates
     ]
 
-    decisions, tokens_step3 = await _dedup_decide_step(candidates_dicts, existing_memories, agent)
+    # Separate structured (graph dedup) from unstructured (LLM dedup)
+    unstructured_candidates_dicts = []
+    unstructured_indices = []
+    graph_decisions: dict[int, dict] = {}
+
+    for idx, (candidate, is_structured, relation_label, object_value) in enumerate(structured_candidates):
+        if is_structured and relation_label and object_value and falkordb_graph:
+            decision = await graph_dedup(
+                relation_label=relation_label,
+                object_value=object_value,
+                user_id=user_id,
+                agent_id=str(agent.id),
+                company_id=str(agent.company_id),
+                qdrant_client=qdrant_client,
+                falkordb_graph=falkordb_graph,
+            )
+            graph_decisions[idx] = {
+                "candidate_index": idx,
+                "action": decision["action"],
+                "supersedes_id": decision.get("supersedes_edge_id"),
+                "rejection_category": "duplicate" if decision["action"] == "duplicate" else None,
+                "rejection_reason": f"Already stored: {decision.get('existing_object')}" if decision["action"] == "duplicate" else None,
+                "confidence": 0.95,
+                "reasoning": f"Graph lookup: {decision['action']} — relation '{relation_label}' object '{object_value}'",
+                "is_graph_decision": True,
+                "relation_label": relation_label,
+                "object_value": object_value,
+            }
+        else:
+            unstructured_candidates_dicts.append({
+                "content": candidate.content,
+                "memory_type": candidate.memory_type or "fact",
+                "importance_score": candidate.importance_score or 0.5,
+            })
+            unstructured_indices.append(idx)
+
+    # Run LLM dedup for unstructured candidates
+    llm_decisions: dict[int, dict] = {}
+    tokens_step3 = 0
+    if unstructured_candidates_dicts:
+        raw_decisions, tokens_step3 = await _dedup_decide_step(
+            unstructured_candidates_dicts, existing_memories, agent
+        )
+        for i, decision in enumerate(raw_decisions):
+            original_idx = unstructured_indices[i] if i < len(unstructured_indices) else i
+            llm_decisions[original_idx] = decision
+
+    # Merge all decisions into a single ordered list
+    all_decisions: list[dict] = []
+    for idx in range(len(all_candidates)):
+        if idx in graph_decisions:
+            all_decisions.append(graph_decisions[idx])
+        elif idx in llm_decisions:
+            all_decisions.append(llm_decisions[idx])
+        else:
+            all_decisions.append({
+                "candidate_index": idx,
+                "action": "persist",
+                "supersedes_id": None,
+                "rejection_category": None,
+                "rejection_reason": None,
+                "confidence": 0.5,
+                "reasoning": "fallback persist",
+                "is_graph_decision": False,
+            })
+
     dedup_decide_ms = int((time.monotonic() - t2) * 1000)
 
-    # Build index → decision map; default to persist if decisions are missing
-    decision_map: dict[int, dict] = {d["candidate_index"]: d for d in decisions}
+    # Build index → decision map
+    decision_map: dict[int, dict] = {d["candidate_index"]: d for d in all_decisions}
 
     t3 = time.monotonic()
     for idx, candidate in enumerate(all_candidates):
-        decision = decision_map.get(idx)
+        decision = decision_map.get(idx, {
+            "action": "persist", "supersedes_id": None,
+            "rejection_category": None, "rejection_reason": None,
+            "is_graph_decision": False,
+        })
 
-        if decision is None:
-            # Fallback: persist if score qualifies
-            action = "persist"
+        action = decision.get("action", "persist")
+        supersedes_id = decision.get("supersedes_id")
+        rejection_category = decision.get("rejection_category")
+        rejection_reason_raw = decision.get("rejection_reason")
+        is_graph = decision.get("is_graph_decision", False)
+
+        if action == "persist":
             dedup_decision = "new"
             dedup_target_id_str = None
             rejection_reason = None
-        else:
-            action = decision.get("action", "persist")
-            supersedes_id = decision.get("supersedes_id")
-            rejection_category = decision.get("rejection_category")
-            rejection_reason_raw = decision.get("rejection_reason")
-
-            if action == "persist":
-                dedup_decision = "new"
-                dedup_target_id_str = None
-                rejection_reason = None
-            elif action == "update":
-                dedup_decision = "update"
-                dedup_target_id_str = supersedes_id
-                rejection_reason = None
-            elif action == "duplicate":
-                dedup_decision = "duplicate"
-                dedup_target_id_str = None
-                rejection_reason = "duplicate"
-            else:  # reject
-                dedup_decision = "new"
-                dedup_target_id_str = None
-                rejection_reason = rejection_category or rejection_reason_raw or "rejected"
+        elif action == "update":
+            dedup_decision = "update"
+            dedup_target_id_str = supersedes_id if not is_graph else None
+            rejection_reason = None
+        elif action == "duplicate":
+            dedup_decision = "duplicate"
+            dedup_target_id_str = None
+            rejection_reason = rejection_category or "duplicate"
+        else:  # reject
+            dedup_decision = "new"
+            dedup_target_id_str = None
+            rejection_reason = rejection_category or rejection_reason_raw or "rejected"
 
         candidate.dedup_decision = dedup_decision
         candidate.dedup_target_id = None
@@ -565,7 +638,7 @@ async def run_pipeline(
 
         candidate.llm_responses = {
             **candidate.llm_responses,
-            "dedup_decide": decision or {"action": "persist", "fallback": True},
+            "dedup_decide": decision,
         }
 
         if action in ("persist", "update"):
@@ -577,6 +650,23 @@ async def run_pipeline(
                     dedup_decision, dedup_target_id_str,
                     extra_metadata, db, qdrant_client,
                 )
+                # For structured candidates, also write to FalkorDB
+                if is_graph and falkordb_graph:
+                    try:
+                        edge_id = await graph_persist(
+                            relation_label=decision.get("relation_label"),
+                            object_value=decision.get("object_value"),
+                            user_id=user_id,
+                            agent_id=str(agent.id),
+                            company_id=str(agent.company_id),
+                            memory_id=str(memory.id),
+                            action=action,
+                            supersedes_edge_id=decision.get("supersedes_id"),
+                            falkordb_graph=falkordb_graph,
+                        )
+                        memory.graph_edge_id = edge_id
+                    except Exception:
+                        pass  # Graph write failed — memory still in Postgres+Qdrant
                 persisted_memories.append(memory)
                 persisted_candidates.append(candidate)
             except Exception as e:
