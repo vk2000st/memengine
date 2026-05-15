@@ -178,6 +178,7 @@ class TraceOut(BaseModel):
     completed_at: datetime | None
     candidates: list[CandidateOut]
     messages: list[dict] = Field(default_factory=list, validation_alias="input_messages")
+    pipeline_timing: dict | None = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 

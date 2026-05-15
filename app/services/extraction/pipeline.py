@@ -4,6 +4,7 @@ Every LLM call is logged onto the MemoryCandidate.llm_responses dict.
 """
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -446,7 +447,9 @@ async def run_pipeline(
     rejected_candidates: list[MemoryCandidate] = []
 
     # ── Step 1: Extract + Classify ───────────────────────────────────────────
+    t0 = time.monotonic()
     raw_candidates, tokens_step1 = await _extract_classify_step(messages, agent)
+    extract_classify_ms = int((time.monotonic() - t0) * 1000)
 
     for raw in raw_candidates:
         content = raw.get("content", "").strip()
@@ -479,14 +482,18 @@ async def run_pipeline(
         trace.completed_at = utcnow()
         trace.llm_calls_total = 1
         trace.tokens_used = tokens_step1
+        trace.pipeline_timing = {"extract_classify_ms": extract_classify_ms, "total_ms": extract_classify_ms}
         await db.commit()
         return persisted_memories, persisted_candidates, rejected_candidates
 
     # ── Step 2: Fetch existing memories ─────────────────────────────────────
     await db.flush()
+    t1 = time.monotonic()
     existing_memories = await _fetch_existing_memories(agent, user_id, db, qdrant_client, limit=50)
+    fetch_memories_ms = int((time.monotonic() - t1) * 1000)
 
     # ── Step 3: Dedup + Decide ───────────────────────────────────────────────
+    t2 = time.monotonic()
     candidates_dicts = [
         {
             "content": c.content,
@@ -497,10 +504,12 @@ async def run_pipeline(
     ]
 
     decisions, tokens_step3 = await _dedup_decide_step(candidates_dicts, existing_memories, agent)
+    dedup_decide_ms = int((time.monotonic() - t2) * 1000)
 
     # Build index → decision map; default to persist if decisions are missing
     decision_map: dict[int, dict] = {d["candidate_index"]: d for d in decisions}
 
+    t3 = time.monotonic()
     for idx, candidate in enumerate(all_candidates):
         decision = decision_map.get(idx)
 
@@ -566,11 +575,20 @@ async def run_pipeline(
             candidate.rejection_reason = rejection_reason
             rejected_candidates.append(candidate)
 
+    persist_ms = int((time.monotonic() - t3) * 1000)
+
     # ── Step 4: Finalize trace ───────────────────────────────────────────────
     trace.status = "completed"
     trace.completed_at = utcnow()
     trace.llm_calls_total = 2
     trace.tokens_used = tokens_step1 + tokens_step3
+    trace.pipeline_timing = {
+        "extract_classify_ms": extract_classify_ms,
+        "fetch_memories_ms": fetch_memories_ms,
+        "dedup_decide_ms": dedup_decide_ms,
+        "persist_ms": persist_ms,
+        "total_ms": extract_classify_ms + fetch_memories_ms + dedup_decide_ms + persist_ms,
+    }
 
     await db.commit()
 
