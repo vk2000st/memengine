@@ -10,7 +10,9 @@ import bcrypt
 import litellm
 import structlog
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
+from arq import create_pool
+from arq.connections import RedisSettings
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from qdrant_client import QdrantClient
@@ -149,6 +151,7 @@ View trace: https://redorb.tech/dashboard/traces?id={trace_id}
 
 
 _qdrant: QdrantClient | None = None
+_arq_pool = None
 
 
 def get_qdrant() -> QdrantClient:
@@ -157,7 +160,7 @@ def get_qdrant() -> QdrantClient:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _qdrant
+    global _qdrant, _arq_pool
 
     # Qdrant
     _qdrant = QdrantClient(
@@ -174,8 +177,12 @@ async def lifespan(app: FastAPI):
         )
         log.info("qdrant_collection_created", name=settings.qdrant_collection)
 
+    # ARQ / Redis
+    _arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+
     log.info("startup_complete")
     yield
+    await _arq_pool.close()
     log.info("shutdown")
 
 
@@ -433,7 +440,6 @@ async def _run_pipeline_background(
 @app.post("/memory/add", response_model=MemoryAddAccepted, status_code=202, tags=["Memory"])
 async def add_memory(
     payload: MemoryAddRequest,
-    background_tasks: BackgroundTasks,
     company: Company = Depends(get_company),
     db: AsyncSession = Depends(get_db),
 ):
@@ -455,10 +461,10 @@ async def add_memory(
     await db.flush()
     await db.commit()  # persisted before the background task starts
 
-    background_tasks.add_task(
-        _run_pipeline_background,
-        trace_id=trace.id,
-        agent_id=agent.id,
+    await _arq_pool.enqueue_job(
+        "run_pipeline_job",
+        trace_id=str(trace.id),
+        agent_id=str(agent.id),
         messages=[m.model_dump() for m in payload.messages],
         user_id=payload.user_id,
         session_id=payload.session_id,
