@@ -384,6 +384,9 @@ async def _persist_memory(
         importance_score=candidate.importance_score or 0.5,
         metadata_={**extra_metadata, "trace_id": str(candidate.trace_id)},
         qdrant_id=qdrant_point_id,
+        is_structured=getattr(candidate, '_is_structured', False),
+        relation_label=getattr(candidate, '_relation_label', None),
+        object_value=getattr(candidate, '_object_value', None),
     )
     db.add(memory)
 
@@ -665,6 +668,18 @@ async def run_pipeline(
                             falkordb_graph=falkordb_graph,
                         )
                         memory.graph_edge_id = edge_id
+                        # Soft-delete old Postgres memory if graph update superseded it
+                        if action == "update" and decision.get("supersedes_id"):
+                            try:
+                                old_mem_result = await db.execute(
+                                    select(Memory).where(Memory.graph_edge_id == decision["supersedes_id"])
+                                )
+                                old_mem = old_mem_result.scalar_one_or_none()
+                                if old_mem:
+                                    old_mem.deleted_at = utcnow()
+                                    old_mem.superseded_by_id = memory.id
+                            except Exception:
+                                pass
                     except Exception:
                         pass  # Graph write failed — memory still in Postgres+Qdrant
                 persisted_memories.append(memory)
