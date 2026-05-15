@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://memengine:memengine@postgres:5432/memengine"
 
+    # Redis
+    redis_url: str = "redis://localhost:6379"
+
     # Qdrant
     qdrant_url: str = "http://qdrant:6333"
     qdrant_api_key: str = ""
