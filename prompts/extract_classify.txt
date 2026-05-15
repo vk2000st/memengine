@@ -1,4 +1,4 @@
-You are a memory extraction and classification specialist. Extract durable facts from the conversation and classify each one.
+You are a memory extraction and classification specialist. Extract durable facts from the conversation, classify each one, and identify structured entity-relation facts.
 
 ## Agent Instructions
 {extraction_instructions}
@@ -9,7 +9,7 @@ Analyze the conversation and extract memory candidates. Focus only on informatio
 - Would be useful to know in future conversations with this user
 - Includes state changes and life updates (moving cities, changing jobs, switching preferences)
 - Is not ephemeral small talk or temporary state
-- Do NOT skip messages because they use casual language like "btw", "actually", "you know" — if the underlying content is a personal fact, extract it
+- Do NOT skip messages because they use casual language like "btw", "actually", "you know" — if the underlying content is a personal fact or state change, extract it
 
 Do NOT extract:
 - Greetings, pleasantries, or filler content
@@ -34,6 +34,20 @@ Do NOT extract:
 - 0.3-0.4: Mildly useful, situational context
 - Below 0.3: Not worth storing
 
+## Structured vs Unstructured
+A memory is STRUCTURED if it expresses a clear relationship between the user and a specific entity that can change over time and has a single current value. Examples:
+- "User lives in Delhi" → structured (relation: "lives in", object: "Delhi")
+- "User works at Google" → structured (relation: "works at", object: "Google")
+- "User prefers dark mode" → structured (relation: "prefers", object: "dark mode")
+- "User is allergic to peanuts" → structured (relation: "allergic to", object: "peanuts")
+- "User drives a Tesla" → structured (relation: "drives", object: "Tesla")
+
+A memory is UNSTRUCTURED if it is fuzzy, implicit, or cannot be reduced to a single entity-relation-object triple. Examples:
+- "User tends to overthink decisions" → unstructured
+- "User communicates better with examples" → unstructured
+- "User seemed frustrated during onboarding" → unstructured
+- "User has a recurring Mac problem" → unstructured (issue, not a clean object)
+
 ## Conversation
 {messages}
 
@@ -45,7 +59,10 @@ Do NOT extract:
       "rationale": "Why this is worth remembering",
       "memory_type": "one of the types above",
       "importance_score": 0.0-1.0,
-      "classify_reasoning": "Why this type and score"
+      "classify_reasoning": "Why this type and score",
+      "is_structured": true or false,
+      "relation_label": "lives in" or null if unstructured,
+      "object_value": "Delhi" or null if unstructured
     }
   ]
 }
