@@ -544,7 +544,7 @@ async def run_pipeline(
             )
             graph_decisions[idx] = {
                 "candidate_index": idx,
-                "action": decision["action"],
+                "action": "persist" if decision["action"] == "new" else decision["action"],
                 "supersedes_id": decision.get("supersedes_edge_id"),
                 "rejection_category": "duplicate" if decision["action"] == "duplicate" else None,
                 "rejection_reason": f"Already stored: {decision.get('existing_object')}" if decision["action"] == "duplicate" else None,
