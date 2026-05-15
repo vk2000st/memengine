@@ -24,6 +24,18 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   app:
     build: .
     ports:
@@ -35,14 +47,18 @@ services:
       QDRANT_URL: http://qdrant:6333
       LITELLM_MODEL: openai/gpt-4o-mini
       ENCRYPTION_KEY: acZL8VjT4S5E15xgeVN5Qo6slWkwfxt1L4LKxeIPPrA=
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
         condition: service_started
+      redis:
+        condition: service_healthy
     volumes:
       - ./prompts:/app/prompts
 
 volumes:
   postgres_data:
   qdrant_data:
+  redis_data:
