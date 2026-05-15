@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Auth / Company ──────────────────────────────────────────────────────────
@@ -161,8 +161,28 @@ class CandidateOut(BaseModel):
     rejection_reason: str | None
     memory_id: uuid.UUID | None
     llm_responses: dict[str, Any]
+    graph_operation: str | None = None
+    relation_label: str | None = None
+    object_value: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def _populate_graph_fields(self) -> "CandidateOut":
+        ec = self.llm_responses.get("extract_classify", {})
+        self.relation_label = ec.get("relation_label")
+        self.object_value = ec.get("object_value")
+
+        dedup_decide = self.llm_responses.get("dedup_decide", {})
+        if dedup_decide.get("is_graph_decision"):
+            action = dedup_decide.get("action", "")
+            if action == "update":
+                self.graph_operation = "update_edge"
+            elif action == "persist":
+                self.graph_operation = "create_edge"
+            elif action == "duplicate":
+                self.graph_operation = "duplicate_edge"
+        return self
 
 
 class TraceOut(BaseModel):
