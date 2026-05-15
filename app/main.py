@@ -40,6 +40,9 @@ from app.schemas.memory import (
     TraceOut, TraceReportCreate, TraceReportOut, TraceStatusOut,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
+from app.graph.client import get_user_graph
+from app.graph.schema import init_graph
+from app.graph.search import graph_search
 
 log = structlog.get_logger()
 settings = get_settings()
@@ -497,6 +500,29 @@ async def search_memory(
         db=db,
         qdrant_client=qdrant,
     )
+
+    # Graph search — get all current structured memories for this user
+    graph_results = []
+    if payload.user_id and agent:
+        try:
+            falkordb_graph = get_user_graph(str(company.id), str(agent.id))
+            graph_results = await graph_search(
+                query=payload.query,
+                user_id=payload.user_id,
+                agent_id=str(agent.id),
+                company_id=str(company.id),
+                falkordb_graph=falkordb_graph,
+            )
+        except Exception:
+            pass
+
+    # Find graph memories not already returned by vector search
+    vector_memory_ids = {str(m.id) for m, _, _ in results}
+    extra_graph_memories = [
+        g for g in graph_results
+        if g["memory_id"] not in vector_memory_ids
+    ]
+    log.info("graph_search_results", graph_total=len(graph_results), graph_extra=len(extra_graph_memories))
 
     # Batch-resolve agent slugs from the unique agent_ids in the result set
     agent_slug_map: dict[uuid.UUID, str] = {}
