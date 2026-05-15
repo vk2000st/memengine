@@ -524,6 +524,23 @@ async def search_memory(
     ]
     log.info("graph_search_results", graph_total=len(graph_results), graph_extra=len(extra_graph_memories))
 
+    # Fetch full Memory objects for graph-only results and prepend to results
+    if extra_graph_memories:
+        for gm in extra_graph_memories:
+            try:
+                mem_id = uuid.UUID(gm["memory_id"])
+                mem_result = await db.execute(
+                    select(Memory).where(
+                        Memory.id == mem_id,
+                        Memory.deleted_at.is_(None),
+                    )
+                )
+                mem = mem_result.scalar_one_or_none()
+                if mem:
+                    results.insert(0, (mem, 0.99, "Exact graph match — current structured memory"))
+            except Exception:
+                pass
+
     # Batch-resolve agent slugs from the unique agent_ids in the result set
     agent_slug_map: dict[uuid.UUID, str] = {}
     agent_ids = {m.agent_id for m, _, _ in results}
