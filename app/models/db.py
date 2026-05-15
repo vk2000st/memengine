@@ -79,6 +79,10 @@ class Memory(Base):
     importance_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     qdrant_id: Mapped[str] = mapped_column(String(36), nullable=True)  # UUID string for Qdrant point
+    is_structured: Mapped[bool] = mapped_column(Boolean, default=False)
+    relation_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    object_value: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    graph_edge_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("memories.id"), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
