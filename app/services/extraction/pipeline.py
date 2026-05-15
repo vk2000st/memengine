@@ -20,7 +20,14 @@ from app.core.config import get_settings
 from app.models.db import Agent, AuditLog, Memory, MemoryCandidate, PipelineTrace, utcnow
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
-_fastembed_model = TextEmbedding(model_name="BAAI/bge-large-en-v1.5")
+_fastembed_model = None
+
+
+def _get_embed_model() -> TextEmbedding:
+    global _fastembed_model
+    if _fastembed_model is None:
+        _fastembed_model = TextEmbedding(model_name="BAAI/bge-large-en-v1.5")
+    return _fastembed_model
 
 
 def _load_prompt(name: str) -> str:
@@ -66,7 +73,7 @@ async def _embed(text: str) -> list[float]:
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         None,
-        lambda: list(_fastembed_model.embed([text]))[0].tolist(),
+        lambda: list(_get_embed_model().embed([text]))[0].tolist(),
     )
     return result
 
