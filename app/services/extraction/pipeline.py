@@ -336,36 +336,6 @@ async def _persist_memory(
     """Save memory to Postgres + Qdrant, handle supersede if update."""
     mem_uuid = uuid.uuid4()
 
-    # Supersede old memory if this is an update
-    if dedup_decision == "update" and dedup_target_id:
-        try:
-            old_id = uuid.UUID(dedup_target_id)
-            result = await db.execute(select(Memory).where(Memory.id == old_id))
-            old_mem = result.scalar_one_or_none()
-            if old_mem and not old_mem.deleted_at:
-                old_mem.deleted_at = utcnow()
-                old_mem.superseded_by_id = mem_uuid
-                db.add(AuditLog(
-                    company_id=agent.company_id,
-                    agent_id=agent.id,
-                    entity_type="memory",
-                    entity_id=old_id,
-                    action="superseded",
-                    actor="system",
-                    details={"superseded_by": str(mem_uuid), "candidate_id": str(candidate.id)},
-                ))
-                # Soft-delete in Qdrant
-                try:
-                    qdrant_client.set_payload(
-                        collection_name=settings.qdrant_collection,
-                        payload={"deleted": True},
-                        points=[old_mem.qdrant_id],
-                    )
-                except Exception:
-                    pass
-        except (ValueError, Exception):
-            pass
-
     # Embed and upsert to Qdrant
     qdrant_point_id = str(uuid.uuid4())
     embedding = await _embed(candidate.content)
@@ -418,6 +388,39 @@ async def _persist_memory(
             "importance_score": candidate.importance_score,
         },
     ))
+
+    # Flush so the new memory row exists before we reference it via FK
+    await db.flush()
+
+    # Supersede old memory if this is an update (must happen after flush)
+    if dedup_decision == "update" and dedup_target_id:
+        try:
+            old_id = uuid.UUID(dedup_target_id)
+            result = await db.execute(select(Memory).where(Memory.id == old_id))
+            old_mem = result.scalar_one_or_none()
+            if old_mem and not old_mem.deleted_at:
+                old_mem.deleted_at = utcnow()
+                old_mem.superseded_by_id = mem_uuid
+                db.add(AuditLog(
+                    company_id=agent.company_id,
+                    agent_id=agent.id,
+                    entity_type="memory",
+                    entity_id=old_id,
+                    action="superseded",
+                    actor="system",
+                    details={"superseded_by": str(mem_uuid), "candidate_id": str(candidate.id)},
+                ))
+                # Soft-delete in Qdrant
+                try:
+                    qdrant_client.set_payload(
+                        collection_name=settings.qdrant_collection,
+                        payload={"deleted": True},
+                        points=[old_mem.qdrant_id],
+                    )
+                except Exception:
+                    pass
+        except (ValueError, Exception):
+            pass
 
     candidate.memory_id = mem_uuid
     return memory
