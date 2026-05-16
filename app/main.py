@@ -339,6 +339,61 @@ async def regenerate_api_key(
     )
 
 
+class EmailSignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/auth/signup", tags=["Auth"])
+async def email_signup(payload: EmailSignupRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Company).where(Company.email == payload.email))
+    existing = result.scalar_one_or_none()
+    if existing:
+        if existing.password_hash:
+            raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
+        else:
+            # Exists via Google — add password to existing account
+            existing.password_hash = bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode()
+            await db.commit()
+            api_key = decrypt_api_key(existing.api_key_encrypted) if existing.api_key_encrypted else None
+            return {"id": str(existing.id), "email": existing.email, "name": existing.name, "api_key": api_key, "is_new": False}
+
+    raw_key = "mem_" + secrets.token_urlsafe(32)
+    hashed_key = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt()).decode()
+    company = Company(
+        name=payload.name,
+        email=payload.email,
+        api_key_hash=hashed_key,
+        api_key_prefix=raw_key[:8],
+        api_key_encrypted=encrypt_api_key(raw_key),
+        password_hash=bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode(),
+    )
+    db.add(company)
+    await db.commit()
+    await db.refresh(company)
+    return {"id": str(company.id), "email": company.email, "name": company.name, "api_key": raw_key, "is_new": True}
+
+
+@app.post("/auth/login", tags=["Auth"])
+async def email_login(payload: EmailLoginRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Company).where(Company.email == payload.email, Company.is_active == True))
+    company = result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if not company.password_hash:
+        raise HTTPException(status_code=401, detail="This account uses Google sign-in. Please continue with Google.")
+    if not bcrypt.checkpw(payload.password.encode(), company.password_hash.encode()):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    api_key = decrypt_api_key(company.api_key_encrypted) if company.api_key_encrypted else None
+    return {"id": str(company.id), "email": company.email, "name": company.name, "api_key": api_key, "is_new": False}
+
+
 @app.get("/companies/by-email", response_model=CompanyOut, tags=["Companies"])
 async def get_company_by_email(email: str, db: AsyncSession = Depends(get_db)):
     """Look up a company by email. Used by the onboarding flow to check for an existing account."""
