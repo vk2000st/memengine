@@ -305,12 +305,22 @@ async def create_company(payload: CompanyCreate, db: AsyncSession = Depends(get_
     """Create a new tenant company and return its API key (shown once)."""
     raw_key = "mem_" + secrets.token_urlsafe(32)
     hashed = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt()).decode()
+
+    # Link to user if email provided
+    user_id = None
+    if payload.email:
+        user_result = await db.execute(select(User).where(User.email == payload.email))
+        user = user_result.scalar_one_or_none()
+        if user:
+            user_id = user.id
+
     company = Company(
         name=payload.name,
         email=payload.email,
         api_key_hash=hashed,
         api_key_prefix=raw_key[:8],
         api_key_encrypted=encrypt_api_key(raw_key),
+        user_id=user_id,
     )
     db.add(company)
     await db.commit()
