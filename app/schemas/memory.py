@@ -340,3 +340,16 @@ class PlaygroundChatRequest(BaseModel):
 class PlaygroundChatResponse(BaseModel):
     response: str
     memories_used: int
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+class EmailSignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    password: str

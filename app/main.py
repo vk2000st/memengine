@@ -38,6 +38,7 @@ from app.schemas.memory import (
     MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
     PlaygroundChatRequest, PlaygroundChatResponse, PlaygroundSessionOut,
     TraceOut, TraceReportCreate, TraceReportOut, TraceStatusOut,
+    EmailSignupRequest, EmailLoginRequest,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
 from app.graph.client import get_user_graph
@@ -337,17 +338,6 @@ async def regenerate_api_key(
         is_active=company.is_active,
         created_at=company.created_at,
     )
-
-
-class EmailSignupRequest(BaseModel):
-    name: str
-    email: str
-    password: str
-
-
-class EmailLoginRequest(BaseModel):
-    email: str
-    password: str
 
 
 @app.post("/auth/signup", tags=["Auth"])
