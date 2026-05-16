@@ -553,7 +553,6 @@ async def search_memory(
     search_results = [
         MemorySearchResult(
             **_memory_to_schema(m).model_dump(),
-            similarity_score=score,
             retrieval_reason=reason,
             agent_slug=agent_slug_map.get(m.agent_id),
         )

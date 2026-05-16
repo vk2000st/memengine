@@ -86,7 +86,6 @@ class MemoryOut(BaseModel):
 
 
 class MemorySearchResult(MemoryOut):
-    similarity_score: float
     retrieval_reason: str
     agent_slug: str | None = None
 
