@@ -24,7 +24,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import get_settings
 from app.models.db import (
     Agent, AuditLog, Company, Memory, MemoryCandidate,
-    PipelineTrace, TraceReport, get_db, get_engine, get_session_factory, utcnow,
+    PipelineTrace, TraceReport, User, get_db, get_engine, get_session_factory, utcnow,
 )
 from app.schemas.memory import (
     AgentCreate, AgentOut,
@@ -38,7 +38,7 @@ from app.schemas.memory import (
     MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
     PlaygroundChatRequest, PlaygroundChatResponse, PlaygroundSessionOut,
     TraceOut, TraceReportCreate, TraceReportOut, TraceStatusOut,
-    EmailSignupRequest, EmailLoginRequest,
+    UserSignupRequest, UserLoginRequest, VerifyEmailRequest, UserSignupResponse, UserLoginResponse,
 )
 from app.services.extraction.pipeline import run_pipeline, run_search
 from app.graph.client import get_user_graph
@@ -152,6 +152,37 @@ View trace: https://redorb.tech/dashboard/traces?id={trace_id}
         log.info("report_email_sent", trace_id=str(trace_id), to=settings.report_email_to)
     except Exception as e:
         log.error("report_email_failed", trace_id=str(trace_id), error=str(e))
+
+
+async def _send_verification_email(email: str, first_name: str, token: str) -> None:
+    if not settings.postmark_server_token:
+        log.warning("postmark_not_configured_skipping_verification_email")
+        return
+    verify_url = f"https://app.redorb.tech/auth/verify-email?token={token}"
+    body = f"""Hi {first_name},
+
+Please verify your email address to complete your Engram signup.
+
+Click here to verify: {verify_url}
+
+This link expires in 24 hours.
+
+If you didn't sign up for Engram, ignore this email.
+"""
+    def _send() -> None:
+        from postmarker.core import PostmarkClient
+        client = PostmarkClient(server_token=settings.postmark_server_token)
+        client.emails.send(
+            From=settings.postmark_from,
+            To=email,
+            Subject="Verify your Engram email",
+            TextBody=body,
+        )
+    try:
+        await asyncio.to_thread(_send)
+        log.info("verification_email_sent", email=email)
+    except Exception as e:
+        log.error("verification_email_failed", email=email, error=str(e))
 
 
 _qdrant: QdrantClient | None = None
@@ -341,56 +372,96 @@ async def regenerate_api_key(
 
 
 @app.post("/auth/signup", tags=["Auth"])
-async def email_signup(payload: EmailSignupRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Company).where(Company.email == payload.email))
-    existing = result.scalar_one_or_none()
-    if existing:
-        if existing.password_hash:
+async def email_signup(payload: UserSignupRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == payload.email))
+    existing_user = result.scalar_one_or_none()
+    if existing_user:
+        if existing_user.password_hash:
             raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
         else:
-            # Exists via Google — add password to existing account
-            existing.password_hash = bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode()
+            existing_user.password_hash = bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode()
             await db.commit()
-            api_key = decrypt_api_key(existing.api_key_encrypted) if existing.api_key_encrypted else None
-            return {"id": str(existing.id), "email": existing.email, "name": existing.name, "api_key": api_key, "is_new": False}
+            company_result = await db.execute(select(Company).where(Company.user_id == existing_user.id))
+            company = company_result.scalar_one_or_none()
+            api_key = decrypt_api_key(company.api_key_encrypted) if company and company.api_key_encrypted else None
+            return UserLoginResponse(
+                user_id=existing_user.id,
+                email=existing_user.email,
+                first_name=existing_user.first_name,
+                last_name=existing_user.last_name,
+                api_key=api_key,
+                company_id=company.id if company else None,
+                is_new=False,
+            )
 
-    raw_key = "mem_" + secrets.token_urlsafe(32)
-    hashed_key = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt()).decode()
-    company = Company(
-        name=payload.name,
+    verification_token = secrets.token_urlsafe(32)
+    user = User(
+        first_name=payload.first_name,
+        last_name=payload.last_name,
         email=payload.email,
-        api_key_hash=hashed_key,
-        api_key_prefix=raw_key[:8],
-        api_key_encrypted=encrypt_api_key(raw_key),
         password_hash=bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode(),
+        email_verified=False,
+        email_verification_token=verification_token,
+        email_verification_sent_at=utcnow(),
     )
-    db.add(company)
+    db.add(user)
     await db.commit()
-    await db.refresh(company)
-    return {"id": str(company.id), "email": company.email, "name": company.name, "api_key": raw_key, "is_new": True}
+    await db.refresh(user)
+    await _send_verification_email(user.email, user.first_name, verification_token)
+    return UserSignupResponse(
+        user_id=user.id,
+        email=user.email,
+        is_new=True,
+        email_verified=False,
+    )
+
+
+@app.post("/auth/verify-email", tags=["Auth"])
+async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email_verification_token == payload.token))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Invalid or expired verification token.")
+    user.email_verified = True
+    user.email_verification_token = None
+    await db.commit()
+    return {"success": True, "email": user.email}
 
 
 @app.post("/auth/login", tags=["Auth"])
-async def email_login(payload: EmailLoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Company).where(Company.email == payload.email, Company.is_active == True))
-    company = result.scalar_one_or_none()
-    if not company:
+async def email_login(payload: UserLoginRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+    if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
-    if not company.password_hash:
+    if not user.password_hash:
         raise HTTPException(status_code=401, detail="This account uses Google sign-in. Please continue with Google.")
-    if not bcrypt.checkpw(payload.password.encode(), company.password_hash.encode()):
+    if not bcrypt.checkpw(payload.password.encode(), user.password_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
-    api_key = decrypt_api_key(company.api_key_encrypted) if company.api_key_encrypted else None
-    return {"id": str(company.id), "email": company.email, "name": company.name, "api_key": api_key, "is_new": False}
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="Please verify your email before signing in.")
+    company_result = await db.execute(select(Company).where(Company.user_id == user.id))
+    company = company_result.scalar_one_or_none()
+    api_key = decrypt_api_key(company.api_key_encrypted) if company and company.api_key_encrypted else None
+    return UserLoginResponse(
+        user_id=user.id,
+        email=user.email,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        api_key=api_key,
+        company_id=company.id if company else None,
+        is_new=company is None,
+    )
 
 
 @app.get("/companies/by-email", response_model=CompanyOut, tags=["Companies"])
 async def get_company_by_email(email: str, db: AsyncSession = Depends(get_db)):
-    """Look up a company by email. Used by the onboarding flow to check for an existing account."""
-    result = await db.execute(
-        select(Company).where(Company.email == email, Company.is_active == True)
-    )
-    company = result.scalar_one_or_none()
+    user_result = await db.execute(select(User).where(User.email == email))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for that email")
+    company_result = await db.execute(select(Company).where(Company.user_id == user.id))
+    company = company_result.scalar_one_or_none()
     if not company:
         raise HTTPException(status_code=404, detail="No account found for that email")
     return company

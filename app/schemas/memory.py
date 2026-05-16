@@ -344,12 +344,34 @@ class PlaygroundChatResponse(BaseModel):
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
-class EmailSignupRequest(BaseModel):
-    name: str
+class UserSignupRequest(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=255)
+    last_name: str = Field(..., min_length=1, max_length=255)
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8)
+
+
+class UserLoginRequest(BaseModel):
     email: str
     password: str
 
 
-class EmailLoginRequest(BaseModel):
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class UserSignupResponse(BaseModel):
+    user_id: uuid.UUID
     email: str
-    password: str
+    is_new: bool
+    email_verified: bool
+
+
+class UserLoginResponse(BaseModel):
+    user_id: uuid.UUID
+    email: str
+    first_name: str
+    last_name: str
+    api_key: str | None
+    company_id: uuid.UUID | None
+    is_new: bool

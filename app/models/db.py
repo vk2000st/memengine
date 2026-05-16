@@ -27,6 +27,23 @@ class Base(AsyncAttrs, DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    first_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_verification_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email_verification_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    company: Mapped["Company | None"] = relationship("Company", back_populates="user", uselist=False)
+
+
 class Company(Base):
     __tablename__ = "companies"
 
@@ -36,7 +53,8 @@ class Company(Base):
     api_key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     api_key_prefix: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    user: Mapped["User | None"] = relationship("User", back_populates="company")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
