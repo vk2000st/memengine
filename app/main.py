@@ -474,7 +474,16 @@ async def get_company_by_email(email: str, db: AsyncSession = Depends(get_db)):
     company = company_result.scalar_one_or_none()
     if not company:
         raise HTTPException(status_code=404, detail="No account found for that email")
-    return company
+    api_key = decrypt_api_key(company.api_key_encrypted) if company.api_key_encrypted else None
+    return CompanyOut(
+        id=company.id,
+        name=company.name,
+        email=company.email,
+        api_key_prefix=company.api_key_prefix,
+        api_key=api_key,
+        is_active=company.is_active,
+        created_at=company.created_at,
+    )
 
 
 # ── Agent routes ─────────────────────────────────────────────────────────────
